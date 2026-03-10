@@ -88,6 +88,9 @@ export default {
       if (request.method === 'GET' && path === '/auth/me') {
         return withCors(await handleMe(request, env), env, request);
       }
+      if (request.method === 'POST' && path === '/auth/profile') {
+        return withCors(await handleUpdateProfile(request, env), env, request);
+      }
       if (request.method === 'POST' && path === '/auth/passkey/register/start') {
         return withCors(await handlePasskeyRegisterStart(request, env), env, request);
       }
@@ -291,7 +294,107 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
     return json({ error: 'user_not_found' }, 404);
   }
 
-  return json({ ok: true, user });
+  const settings = await readUserSettings(env.DB, user.id, app.appId);
+  const profile = settings.profile && typeof settings.profile === 'object'
+    ? settings.profile as JsonRecord
+    : null;
+  const displayName = `${profile?.displayName ?? ''}`.trim();
+  const avatarDataUrl = `${profile?.avatarDataUrl ?? ''}`.trim();
+
+  return json({
+    ok: true,
+    user: {
+      ...user,
+      display_name: displayName || user.email.split('@')[0] || 'CineDock User',
+      avatar_url: avatarDataUrl,
+    },
+  });
+}
+
+async function handleUpdateProfile(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const body = await readJson(request);
+  const displayName = `${body.displayName ?? ''}`.trim();
+  const avatarDataUrl = `${body.avatarDataUrl ?? ''}`.trim();
+  if (!displayName) return json({ error: 'invalid_payload' }, 400);
+  if (displayName.length > 80) return json({ error: 'invalid_payload' }, 400);
+  const avatarError = validateAvatarDataUrl(avatarDataUrl);
+  if (avatarError != null) {
+    return json({ error: avatarError }, 400);
+  }
+
+  const current = await readUserSettings(env.DB, authUser.id, app.appId);
+  const next: JsonRecord = {
+    ...current,
+    profile: {
+      ...(current.profile && typeof current.profile === 'object'
+          ? current.profile as JsonRecord
+          : {}),
+      displayName,
+      avatarDataUrl,
+      updatedAt: nowSeconds(),
+    },
+  };
+  await writeUserSettings(env.DB, authUser.id, app.appId, next);
+
+  return json({
+    ok: true,
+    profile: {
+      displayName,
+      avatarUrl: avatarDataUrl,
+    },
+  });
+}
+
+function validateAvatarDataUrl(input: string): string | null {
+  if (!input) return null;
+  if (!input.startsWith('data:image/')) return 'invalid_payload';
+  const marker = ';base64,';
+  const idx = input.indexOf(marker);
+  if (idx <= 0) return 'invalid_payload';
+  const base64 = input.substring(idx + marker.length);
+  if (!base64) return 'invalid_payload';
+  // ~1.5MB base64 payload hard limit to prevent oversized DB writes.
+  if (base64.length > 2_000_000) return 'avatar_too_large';
+  return null;
+}
+
+async function readUserSettings(
+  db: D1Database,
+  userId: string,
+  appId: string,
+): Promise<JsonRecord> {
+  const row = await db
+    .prepare(
+      'SELECT payload_json FROM user_settings WHERE user_id = ?1 AND app_id = ?2 LIMIT 1',
+    )
+    .bind(userId, appId)
+    .first<{ payload_json: string }>();
+  if (!row?.payload_json) return {};
+  const parsed = parseJson(row.payload_json);
+  return parsed ?? {};
+}
+
+async function writeUserSettings(
+  db: D1Database,
+  userId: string,
+  appId: string,
+  payload: JsonRecord,
+): Promise<void> {
+  const now = nowSeconds();
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, app_id, payload_json, updated_at)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(user_id, app_id) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, appId, JSON.stringify(payload), now)
+    .run();
 }
 
 type AuthUser = { id: string; email: string };
@@ -446,41 +549,52 @@ async function handlePasskeyLoginStart(request: Request, env: Env): Promise<Resp
   const app = resolveAppContext(request, env);
   const body = await readJson(request);
   const email = normalizeEmail(body.email);
-  if (!isValidEmail(email)) {
-    return json({ error: 'invalid_email' }, 400);
-  }
-
-  const user = await env.DB
-    .prepare('SELECT id, email FROM users WHERE email = ?1 LIMIT 1')
-    .bind(email)
-    .first<{ id: string; email: string }>();
-  if (!user) {
-    return json({ error: 'passkey_no_credentials' }, 404);
-  }
-
-  const credentials = await listUserPasskeyCredentials(env.DB, user.id);
-  if (credentials.length === 0) {
-    return json({ error: 'passkey_no_credentials' }, 404);
-  }
 
   const rpID = resolvePasskeyRpId(env, app);
   const challengeTtl = intVar(env.PASSKEY_CHALLENGE_TTL_SECONDS, 300);
-  const options = await generateAuthenticationOptions({
-    rpID,
-    timeout: 60_000,
-    userVerification: 'preferred',
-    allowCredentials: credentials.map((item) => ({
-      id: item.credential_id,
-      transports: parseTransports(item.transports_json),
-    })),
-  });
+  let loginUserId: string | undefined;
+  let loginEmail: string | undefined;
+  let options: Awaited<ReturnType<typeof generateAuthenticationOptions>>;
+
+  if (isValidEmail(email)) {
+    const user = await env.DB
+      .prepare('SELECT id, email FROM users WHERE email = ?1 LIMIT 1')
+      .bind(email)
+      .first<{ id: string; email: string }>();
+    if (!user) {
+      return json({ error: 'passkey_no_credentials' }, 404);
+    }
+
+    const credentials = await listUserPasskeyCredentials(env.DB, user.id);
+    if (credentials.length === 0) {
+      return json({ error: 'passkey_no_credentials' }, 404);
+    }
+
+    loginUserId = user.id;
+    loginEmail = user.email;
+    options = await generateAuthenticationOptions({
+      rpID,
+      timeout: 60_000,
+      userVerification: 'preferred',
+      allowCredentials: credentials.map((item) => ({
+        id: item.credential_id,
+        transports: parseTransports(item.transports_json),
+      })),
+    });
+  } else {
+    options = await generateAuthenticationOptions({
+      rpID,
+      timeout: 60_000,
+      userVerification: 'preferred',
+    });
+  }
 
   await env.OTP_KV.put(
-    passkeyLoginChallengeKey(app.appId, email),
+    passkeyLoginChallengeKey(app.appId, options.challenge),
     JSON.stringify({
       challenge: options.challenge,
-      userId: user.id,
-      email,
+      userId: loginUserId,
+      email: loginEmail,
       appId: app.appId,
       expiresAt: nowSeconds() + challengeTtl,
     }),
@@ -493,13 +607,14 @@ async function handlePasskeyLoginStart(request: Request, env: Env): Promise<Resp
 async function handlePasskeyLoginFinish(request: Request, env: Env): Promise<Response> {
   const app = resolveAppContext(request, env);
   const body = await readJson(request);
-  const email = normalizeEmail(body.email);
   const credential = body.credential;
-  if (!isValidEmail(email) || !credential || typeof credential !== 'object') {
+  if (!credential || typeof credential !== 'object') {
     return json({ error: 'invalid_payload' }, 400);
   }
 
-  const challengeRaw = await env.OTP_KV.get(passkeyLoginChallengeKey(app.appId, email));
+  const challenge = extractChallengeFromCredential(credential as JsonRecord);
+  if (!challenge) return json({ error: 'passkey_challenge_invalid' }, 400);
+  const challengeRaw = await env.OTP_KV.get(passkeyLoginChallengeKey(app.appId, challenge));
   if (!challengeRaw) return json({ error: 'passkey_challenge_expired' }, 400);
   const challengeState = parseJson(challengeRaw);
   if (!challengeState) return json({ error: 'passkey_challenge_invalid' }, 400);
@@ -516,10 +631,14 @@ async function handlePasskeyLoginFinish(request: Request, env: Env): Promise<Res
     .first<StoredPasskeyCredential>();
   if (!dbCredential) return json({ error: 'passkey_no_credentials' }, 404);
 
-  if (
-    `${challengeState.userId ?? ''}`.trim() !== dbCredential.user_id ||
-    `${challengeState.appId ?? ''}`.trim() !== app.appId
-  ) {
+  const challengeUserId = `${challengeState.userId ?? ''}`.trim();
+  const challengeAppId = `${challengeState.appId ?? ''}`.trim();
+  if (challengeAppId !== app.appId) {
+    return json({ error: 'passkey_challenge_invalid' }, 400);
+  }
+  // For discoverable passkey flow (no email on start), challenge userId may be empty.
+  // Only enforce userId match when start step already resolved a specific user.
+  if (challengeUserId.length > 0 && challengeUserId !== dbCredential.user_id) {
     return json({ error: 'passkey_challenge_invalid' }, 400);
   }
 
@@ -559,7 +678,7 @@ async function handlePasskeyLoginFinish(request: Request, env: Env): Promise<Res
     if (!user) return json({ error: 'user_not_found' }, 404);
 
     const tokens = await issueSessionTokens(env, app, user.id, user.email);
-    await env.OTP_KV.delete(passkeyLoginChallengeKey(app.appId, email));
+    await env.OTP_KV.delete(passkeyLoginChallengeKey(app.appId, challenge));
     return json({ ok: true, user, tokens });
   } catch (error) {
     console.error('passkey-login-verify-error', error);
@@ -707,8 +826,25 @@ function passkeyRegisterChallengeKey(appId: string, userId: string): string {
   return `passkey:${appId}:register:${userId}`;
 }
 
-function passkeyLoginChallengeKey(appId: string, email: string): string {
-  return `passkey:${appId}:login:${email}`;
+function passkeyLoginChallengeKey(appId: string, challenge: string): string {
+  return `passkey:${appId}:login:${challenge}`;
+}
+
+function extractChallengeFromCredential(credential: JsonRecord): string | null {
+  const response = credential.response;
+  if (!response || typeof response !== 'object') return null;
+  const clientDataJSON = `${(response as JsonRecord).clientDataJSON ?? ''}`.trim();
+  if (!clientDataJSON) return null;
+  try {
+    const decoded = base64UrlDecodeToString(clientDataJSON);
+    if (!decoded) return null;
+    const parsed = parseJson(decoded);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const challenge = `${(parsed as JsonRecord).challenge ?? ''}`.trim();
+    return challenge || null;
+  } catch {
+    return null;
+  }
 }
 
 async function requireAuthUser(

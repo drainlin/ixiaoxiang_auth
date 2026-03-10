@@ -23,8 +23,8 @@ OTP_TTL_SECONDS = "300"
 OTP_MAX_ATTEMPTS = "5"
 PASSKEY_RP_NAME = "CineDock"
 PASSKEY_CHALLENGE_TTL_SECONDS = "300"
-PASSKEY_RP_ID = "ixiaoxiang.cn"
-PASSKEY_EXPECTED_ORIGINS = "https://ixiaoxiang.cn"
+PASSKEY_RP_ID = "www.ixiaoxiang.cn"
+PASSKEY_EXPECTED_ORIGINS = "https://www.ixiaoxiang.cn"
 # APP_CONFIGS = "{\"cinedock\":{\"appName\":\"CineDock\",\"appOrigin\":\"https://app.example.com\",\"passkeyRpId\":\"example.com\",\"passkeyExpectedOrigins\":[\"https://app.example.com\"]}}"
 
 # Required for passkeys:
