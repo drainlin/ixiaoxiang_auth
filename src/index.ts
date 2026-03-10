@@ -1,3 +1,12 @@
+import {
+  generateAuthenticationOptions,
+  generateRegistrationOptions,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
+  type VerifiedRegistrationResponse,
+} from '@simplewebauthn/server';
+import type { AuthenticatorTransportFuture } from '@simplewebauthn/types';
+
 interface Env {
   DB: D1Database;
   OTP_KV: KVNamespace;
@@ -10,47 +19,101 @@ interface Env {
   REFRESH_TOKEN_TTL_SECONDS?: string;
   OTP_TTL_SECONDS?: string;
   OTP_MAX_ATTEMPTS?: string;
+  DEFAULT_APP_ID?: string;
+  APP_CONFIGS?: string;
+  PASSKEY_RP_ID?: string;
+  PASSKEY_RP_NAME?: string;
+  PASSKEY_EXPECTED_ORIGINS?: string;
+  PASSKEY_CHALLENGE_TTL_SECONDS?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
+type AppConfig = {
+  appName?: unknown;
+  appOrigin?: unknown;
+  passkeyRpId?: unknown;
+  passkeyRpName?: unknown;
+  passkeyExpectedOrigins?: unknown;
+};
+type AppConfigRecord = Record<string, AppConfig>;
+
+type AppContext = {
+  appId: string;
+  appName: string;
+  appOrigin?: string;
+  passkeyRpId?: string;
+  passkeyRpName?: string;
+  passkeyExpectedOrigins: string[];
+};
 
 const encoder = new TextEncoder();
+const DEFAULT_APP_ID = 'cinedock';
+
+class HttpError extends Error {
+  status: number;
+  code: string;
+
+  constructor(status: number, code: string) {
+    super(code);
+    this.status = status;
+    this.code = code;
+  }
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: corsHeaders(env) });
+        return new Response(null, {
+          status: 204,
+          headers: corsHeaders(env, resolveAppContextSafe(request, env)),
+        });
       }
 
       const url = new URL(request.url);
       const path = url.pathname.replace(/\/+$/, '') || '/';
 
       if (request.method === 'POST' && path === '/auth/send-code') {
-        return withCors(await handleSendCode(request, env), env);
+        return withCors(await handleSendCode(request, env), env, request);
       }
       if (request.method === 'POST' && path === '/auth/verify-code') {
-        return withCors(await handleVerifyCode(request, env), env);
+        return withCors(await handleVerifyCode(request, env), env, request);
       }
       if (request.method === 'POST' && path === '/auth/refresh') {
-        return withCors(await handleRefresh(request, env), env);
+        return withCors(await handleRefresh(request, env), env, request);
       }
       if (request.method === 'POST' && path === '/auth/logout') {
-        return withCors(await handleLogout(request, env), env);
+        return withCors(await handleLogout(request, env), env, request);
       }
       if (request.method === 'GET' && path === '/auth/me') {
-        return withCors(await handleMe(request, env), env);
+        return withCors(await handleMe(request, env), env, request);
+      }
+      if (request.method === 'POST' && path === '/auth/passkey/register/start') {
+        return withCors(await handlePasskeyRegisterStart(request, env), env, request);
+      }
+      if (request.method === 'POST' && path === '/auth/passkey/register/finish') {
+        return withCors(await handlePasskeyRegisterFinish(request, env), env, request);
+      }
+      if (request.method === 'POST' && path === '/auth/passkey/login/start') {
+        return withCors(await handlePasskeyLoginStart(request, env), env, request);
+      }
+      if (request.method === 'POST' && path === '/auth/passkey/login/finish') {
+        return withCors(await handlePasskeyLoginFinish(request, env), env, request);
       }
 
-      return withCors(json({ error: 'not_found' }, 404), env);
+      return withCors(json({ error: 'not_found' }, 404), env, request);
     } catch (error) {
+      if (error instanceof HttpError) {
+        return withCors(json({ error: error.code }, error.status), env, request);
+      }
       console.error('worker-error', error);
-      return withCors(json({ error: 'internal_error' }, 500), env);
+      return withCors(json({ error: 'internal_error' }, 500), env, request);
     }
   },
 };
 
 async function handleSendCode(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
   const body = await readJson(request);
   const email = normalizeEmail(body.email);
   if (!isValidEmail(email)) {
@@ -71,16 +134,17 @@ async function handleSendCode(request: Request, env: Env): Promise<Response> {
     expiresAt,
   };
 
-  await env.OTP_KV.put(otpKey(email, purpose), JSON.stringify(value), {
+  await env.OTP_KV.put(otpKey(email, purpose, app.appId), JSON.stringify(value), {
     expirationTtl: otpTtl,
   });
 
-  await sendOtpEmail({ env, email, code, ttlSeconds: otpTtl });
+  await sendOtpEmail({ env, app, email, code, ttlSeconds: otpTtl });
 
   return json({ ok: true, expiresAt });
 }
 
 async function handleVerifyCode(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
   const body = await readJson(request);
   const email = normalizeEmail(body.email);
   const code = `${body.code ?? ''}`.trim();
@@ -89,7 +153,7 @@ async function handleVerifyCode(request: Request, env: Env): Promise<Response> {
     return json({ error: 'invalid_payload' }, 400);
   }
 
-  const key = otpKey(email, purpose);
+  const key = otpKey(email, purpose, app.appId);
   const raw = await env.OTP_KV.get(key);
   if (!raw) {
     return json({ error: 'otp_expired' }, 400);
@@ -127,7 +191,7 @@ async function handleVerifyCode(request: Request, env: Env): Promise<Response> {
   await env.OTP_KV.delete(key);
 
   const user = await upsertUserByEmail(env.DB, email);
-  const tokens = await issueSessionTokens(env, user.id, user.email);
+  const tokens = await issueSessionTokens(env, app, user.id, user.email);
 
   return json({
     ok: true,
@@ -137,6 +201,7 @@ async function handleVerifyCode(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleRefresh(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
   const body = await readJson(request);
   const refreshToken = `${body.refreshToken ?? ''}`.trim();
   if (!refreshToken) {
@@ -147,17 +212,18 @@ async function handleRefresh(request: Request, env: Env): Promise<Response> {
   const now = nowSeconds();
 
   const sessionRow = await env.DB.prepare(
-    `SELECT s.id AS session_id, s.user_id, s.expires_at, s.revoked_at, u.email
+    `SELECT s.id AS session_id, s.user_id, s.expires_at, s.revoked_at, s.app_id, u.email
      FROM sessions s
      JOIN users u ON u.id = s.user_id
-     WHERE s.refresh_hash = ?1 LIMIT 1`,
+     WHERE s.refresh_hash = ?1 AND s.app_id = ?2 LIMIT 1`,
   )
-    .bind(refreshHash)
+    .bind(refreshHash, app.appId)
     .first<{
       session_id: string;
       user_id: string;
       expires_at: number;
       revoked_at: number | null;
+      app_id: string;
       email: string;
     }>();
 
@@ -174,11 +240,17 @@ async function handleRefresh(request: Request, env: Env): Promise<Response> {
     .bind(now, sessionRow.session_id)
     .run();
 
-  const tokens = await issueSessionTokens(env, sessionRow.user_id, sessionRow.email);
+  const tokens = await issueSessionTokens(
+    env,
+    app,
+    sessionRow.user_id,
+    sessionRow.email,
+  );
   return json({ ok: true, tokens });
 }
 
 async function handleLogout(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
   const body = await readJson(request);
   const refreshToken = `${body.refreshToken ?? ''}`.trim();
   if (!refreshToken) {
@@ -188,22 +260,23 @@ async function handleLogout(request: Request, env: Env): Promise<Response> {
   const now = nowSeconds();
 
   await env.DB.prepare(
-    'UPDATE sessions SET revoked_at = ?1, updated_at = ?1 WHERE refresh_hash = ?2',
+    'UPDATE sessions SET revoked_at = ?1, updated_at = ?1 WHERE refresh_hash = ?2 AND app_id = ?3',
   )
-    .bind(now, refreshHash)
+    .bind(now, refreshHash, app.appId)
     .run();
 
   return json({ ok: true });
 }
 
 async function handleMe(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
   const auth = request.headers.get('authorization') ?? '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   if (!token) {
     return json({ error: 'missing_access_token' }, 401);
   }
 
-  const payload = await verifyJwt(token, env.JWT_SECRET);
+  const payload = await verifyJwt(token, env.JWT_SECRET, app.appId);
   if (!payload || typeof payload.sub !== 'string') {
     return json({ error: 'invalid_access_token' }, 401);
   }
@@ -221,7 +294,280 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, user });
 }
 
-async function issueSessionTokens(env: Env, userId: string, email: string) {
+type AuthUser = { id: string; email: string };
+
+type StoredPasskeyCredential = {
+  id: string;
+  user_id: string;
+  credential_id: string;
+  public_key_b64url: string;
+  counter: number;
+  transports_json: string | null;
+  device_type: string | null;
+  backed_up: number | null;
+  created_at: number;
+  updated_at: number;
+  last_used_at: number | null;
+};
+
+async function handlePasskeyRegisterStart(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const body = await readJson(request);
+  const userId = `${body.userId ?? authUser.id}`.trim();
+  const userName = normalizeEmail(body.email ?? authUser.email);
+  const userDisplayName = `${body.displayName ?? userName}`.trim();
+  if (!userId || !isValidEmail(userName) || userId !== authUser.id) {
+    return json({ error: 'invalid_payload' }, 400);
+  }
+
+  const rpID = resolvePasskeyRpId(env, app);
+  const rpName = app.passkeyRpName;
+  const challengeTtl = intVar(env.PASSKEY_CHALLENGE_TTL_SECONDS, 300);
+  const credentials = await listUserPasskeyCredentials(env.DB, userId);
+
+  const options = await generateRegistrationOptions({
+    rpID,
+    rpName,
+    userName,
+    userDisplayName: userDisplayName || userName,
+    userID: encoder.encode(userId),
+    timeout: 60_000,
+    attestationType: 'none',
+    excludeCredentials: credentials.map((item) => ({
+      id: item.credential_id,
+      transports: parseTransports(item.transports_json),
+    })),
+    authenticatorSelection: {
+      residentKey: 'preferred',
+      userVerification: 'preferred',
+    },
+  });
+
+  await env.OTP_KV.put(
+    passkeyRegisterChallengeKey(app.appId, userId),
+    JSON.stringify({
+      challenge: options.challenge,
+      userId,
+      email: userName,
+      appId: app.appId,
+      expiresAt: nowSeconds() + challengeTtl,
+    }),
+    { expirationTtl: challengeTtl },
+  );
+
+  return json({ ok: true, options });
+}
+
+async function handlePasskeyRegisterFinish(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const body = await readJson(request);
+  const credential = body.credential;
+  if (!credential || typeof credential !== 'object') {
+    return json({ error: 'invalid_payload' }, 400);
+  }
+
+  const challengeRaw = await env.OTP_KV.get(passkeyRegisterChallengeKey(app.appId, authUser.id));
+  if (!challengeRaw) return json({ error: 'passkey_challenge_expired' }, 400);
+  const challengeState = parseJson(challengeRaw);
+  if (
+    !challengeState ||
+    `${challengeState.userId ?? ''}`.trim() !== authUser.id ||
+    `${challengeState.appId ?? ''}`.trim() !== app.appId
+  ) {
+    return json({ error: 'passkey_challenge_invalid' }, 400);
+  }
+
+  const expectedOrigin = resolvePasskeyExpectedOrigins(env, app);
+  const expectedRPID = resolvePasskeyRpId(env, app);
+
+  let verification: VerifiedRegistrationResponse;
+  try {
+    verification = await verifyRegistrationResponse({
+      response: credential as Parameters<typeof verifyRegistrationResponse>[0]['response'],
+      expectedChallenge: `${challengeState.challenge ?? ''}`,
+      expectedOrigin,
+      expectedRPID,
+      requireUserVerification: false,
+    });
+  } catch (error) {
+    console.error('passkey-register-verify-error', error);
+    return json({ error: 'passkey_verification_failed' }, 400);
+  }
+
+  if (!verification.verified || !verification.registrationInfo) {
+    return json({ error: 'passkey_verification_failed' }, 400);
+  }
+
+  const info = verification.registrationInfo;
+  const responsePayload = (credential as { response?: { transports?: unknown } }).response;
+  const transports =
+    responsePayload && Array.isArray(responsePayload.transports)
+      ? responsePayload.transports.map((item) => `${item ?? ''}`.trim()).filter(Boolean)
+      : [];
+  const now = nowSeconds();
+  await env.DB.prepare(
+    `INSERT INTO passkey_credentials
+      (id, user_id, credential_id, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?9)
+     ON CONFLICT(credential_id) DO UPDATE SET
+      user_id = excluded.user_id,
+      public_key_b64url = excluded.public_key_b64url,
+      counter = excluded.counter,
+      transports_json = excluded.transports_json,
+      device_type = excluded.device_type,
+      backed_up = excluded.backed_up,
+      updated_at = excluded.updated_at,
+      last_used_at = excluded.last_used_at`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      authUser.id,
+      info.credentialID,
+      base64UrlEncode(info.credentialPublicKey),
+      info.counter,
+      JSON.stringify(transports),
+      info.credentialDeviceType,
+      info.credentialBackedUp ? 1 : 0,
+      now,
+    )
+    .run();
+
+  await env.OTP_KV.delete(passkeyRegisterChallengeKey(app.appId, authUser.id));
+  return json({ ok: true });
+}
+
+async function handlePasskeyLoginStart(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const body = await readJson(request);
+  const email = normalizeEmail(body.email);
+  if (!isValidEmail(email)) {
+    return json({ error: 'invalid_email' }, 400);
+  }
+
+  const user = await env.DB
+    .prepare('SELECT id, email FROM users WHERE email = ?1 LIMIT 1')
+    .bind(email)
+    .first<{ id: string; email: string }>();
+  if (!user) {
+    return json({ error: 'passkey_no_credentials' }, 404);
+  }
+
+  const credentials = await listUserPasskeyCredentials(env.DB, user.id);
+  if (credentials.length === 0) {
+    return json({ error: 'passkey_no_credentials' }, 404);
+  }
+
+  const rpID = resolvePasskeyRpId(env, app);
+  const challengeTtl = intVar(env.PASSKEY_CHALLENGE_TTL_SECONDS, 300);
+  const options = await generateAuthenticationOptions({
+    rpID,
+    timeout: 60_000,
+    userVerification: 'preferred',
+    allowCredentials: credentials.map((item) => ({
+      id: item.credential_id,
+      transports: parseTransports(item.transports_json),
+    })),
+  });
+
+  await env.OTP_KV.put(
+    passkeyLoginChallengeKey(app.appId, email),
+    JSON.stringify({
+      challenge: options.challenge,
+      userId: user.id,
+      email,
+      appId: app.appId,
+      expiresAt: nowSeconds() + challengeTtl,
+    }),
+    { expirationTtl: challengeTtl },
+  );
+
+  return json({ ok: true, options });
+}
+
+async function handlePasskeyLoginFinish(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const body = await readJson(request);
+  const email = normalizeEmail(body.email);
+  const credential = body.credential;
+  if (!isValidEmail(email) || !credential || typeof credential !== 'object') {
+    return json({ error: 'invalid_payload' }, 400);
+  }
+
+  const challengeRaw = await env.OTP_KV.get(passkeyLoginChallengeKey(app.appId, email));
+  if (!challengeRaw) return json({ error: 'passkey_challenge_expired' }, 400);
+  const challengeState = parseJson(challengeRaw);
+  if (!challengeState) return json({ error: 'passkey_challenge_invalid' }, 400);
+
+  const credentialId = `${(credential as JsonRecord).id ?? ''}`.trim();
+  if (!credentialId) return json({ error: 'invalid_payload' }, 400);
+
+  const dbCredential = await env.DB.prepare(
+    `SELECT id, user_id, credential_id, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at
+       FROM passkey_credentials
+      WHERE credential_id = ?1 LIMIT 1`,
+  )
+    .bind(credentialId)
+    .first<StoredPasskeyCredential>();
+  if (!dbCredential) return json({ error: 'passkey_no_credentials' }, 404);
+
+  if (
+    `${challengeState.userId ?? ''}`.trim() !== dbCredential.user_id ||
+    `${challengeState.appId ?? ''}`.trim() !== app.appId
+  ) {
+    return json({ error: 'passkey_challenge_invalid' }, 400);
+  }
+
+  const expectedOrigin = resolvePasskeyExpectedOrigins(env, app);
+  const expectedRPID = resolvePasskeyRpId(env, app);
+
+  try {
+    const verification = await verifyAuthenticationResponse({
+      response: credential as Parameters<typeof verifyAuthenticationResponse>[0]['response'],
+      expectedChallenge: `${challengeState.challenge ?? ''}`,
+      expectedOrigin,
+      expectedRPID,
+      requireUserVerification: false,
+      authenticator: {
+        credentialID: dbCredential.credential_id,
+        credentialPublicKey: base64UrlDecode(dbCredential.public_key_b64url),
+        counter: Number(dbCredential.counter || 0),
+        transports: parseTransports(dbCredential.transports_json),
+      },
+    });
+
+    if (!verification.verified) {
+      return json({ error: 'passkey_verification_failed' }, 400);
+    }
+
+    const now = nowSeconds();
+    await env.DB.prepare(
+      'UPDATE passkey_credentials SET counter = ?1, updated_at = ?2, last_used_at = ?2 WHERE credential_id = ?3',
+    )
+      .bind(verification.authenticationInfo.newCounter, now, dbCredential.credential_id)
+      .run();
+
+    const user = await env.DB
+      .prepare('SELECT id, email, status, created_at FROM users WHERE id = ?1 LIMIT 1')
+      .bind(dbCredential.user_id)
+      .first<{ id: string; email: string; status: string; created_at: number }>();
+    if (!user) return json({ error: 'user_not_found' }, 404);
+
+    const tokens = await issueSessionTokens(env, app, user.id, user.email);
+    await env.OTP_KV.delete(passkeyLoginChallengeKey(app.appId, email));
+    return json({ ok: true, user, tokens });
+  } catch (error) {
+    console.error('passkey-login-verify-error', error);
+    return json({ error: 'passkey_verification_failed' }, 400);
+  }
+}
+
+async function issueSessionTokens(env: Env, app: AppContext, userId: string, email: string) {
   const now = nowSeconds();
   const accessTtl = intVar(env.ACCESS_TOKEN_TTL_SECONDS, 900);
   const refreshTtl = intVar(env.REFRESH_TOKEN_TTL_SECONDS, 2_592_000);
@@ -233,6 +579,7 @@ async function issueSessionTokens(env: Env, userId: string, email: string) {
       iat: now,
       exp: now + accessTtl,
       scope: 'user',
+      aud: app.appId,
     },
     env.JWT_SECRET,
   );
@@ -242,10 +589,10 @@ async function issueSessionTokens(env: Env, userId: string, email: string) {
   const sessionId = crypto.randomUUID();
 
   await env.DB.prepare(
-    `INSERT INTO sessions (id, user_id, refresh_hash, expires_at, revoked_at, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?5)`,
+    `INSERT INTO sessions (id, app_id, user_id, refresh_hash, expires_at, revoked_at, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?6)`,
   )
-    .bind(sessionId, userId, refreshHash, now + refreshTtl, now)
+    .bind(sessionId, app.appId, userId, refreshHash, now + refreshTtl, now)
     .run();
 
   return {
@@ -283,11 +630,12 @@ async function upsertUserByEmail(db: D1Database, email: string) {
 
 async function sendOtpEmail(args: {
   env: Env;
+  app: AppContext;
   email: string;
   code: string;
   ttlSeconds: number;
 }) {
-  const appName = args.env.APP_NAME ?? 'CineDock';
+  const appName = args.app.appName;
   const gatewayUrl = `${args.env.MAIL_GATEWAY_URL}`.trim().replace(/\/+$/, '');
   const token = `${args.env.MAIL_GATEWAY_TOKEN}`.trim();
   if (!gatewayUrl || !token) {
@@ -303,6 +651,7 @@ async function sendOtpEmail(args: {
       email: args.email,
       code: args.code,
       ttl_seconds: args.ttlSeconds,
+      app_id: args.app.appId,
       app_name: appName,
     }),
   });
@@ -350,8 +699,102 @@ function generateOtp(): string {
   return `${n}`.padStart(6, '0');
 }
 
-function otpKey(email: string, purpose: string): string {
-  return `otp:${purpose}:${email}`;
+function otpKey(email: string, purpose: string, appId: string): string {
+  return `otp:${appId}:${purpose}:${email}`;
+}
+
+function passkeyRegisterChallengeKey(appId: string, userId: string): string {
+  return `passkey:${appId}:register:${userId}`;
+}
+
+function passkeyLoginChallengeKey(appId: string, email: string): string {
+  return `passkey:${appId}:login:${email}`;
+}
+
+async function requireAuthUser(
+  request: Request,
+  env: Env,
+  app: AppContext,
+): Promise<AuthUser | null> {
+  const auth = request.headers.get('authorization') ?? '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (!token) return null;
+
+  const payload = await verifyJwt(token, env.JWT_SECRET, app.appId);
+  if (!payload || typeof payload.sub !== 'string') return null;
+
+  const user = await env.DB
+    .prepare('SELECT id, email FROM users WHERE id = ?1 LIMIT 1')
+    .bind(payload.sub)
+    .first<AuthUser>();
+  return user ?? null;
+}
+
+function resolvePasskeyRpId(env: Env, app: AppContext): string {
+  const configured = `${app.passkeyRpId ?? ''}`.trim();
+  if (configured) return configured;
+
+  const globalConfigured = `${env.PASSKEY_RP_ID ?? ''}`.trim();
+  if (globalConfigured) return globalConfigured;
+
+  const appOrigin = `${app.appOrigin ?? ''}`.trim();
+  if (appOrigin) {
+    try {
+      return new URL(appOrigin).hostname;
+    } catch {
+      // no-op
+    }
+  }
+  throw new HttpError(501, 'passkey_not_supported_server');
+}
+
+function resolvePasskeyExpectedOrigins(env: Env, app: AppContext): string[] {
+  if (app.passkeyExpectedOrigins.length > 0) {
+    return app.passkeyExpectedOrigins;
+  }
+
+  const explicit = `${env.PASSKEY_EXPECTED_ORIGINS ?? ''}`
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (explicit.length > 0) return explicit;
+
+  const appOrigin = `${app.appOrigin ?? ''}`.trim();
+  if (appOrigin) return [appOrigin];
+
+  const rpID = `${env.PASSKEY_RP_ID ?? ''}`.trim();
+  if (rpID) return [`https://${rpID}`];
+
+  throw new HttpError(501, 'passkey_not_supported_server');
+}
+
+function parseTransports(raw: string | null): AuthenticatorTransportFuture[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => `${item ?? ''}`.trim())
+      .filter(Boolean) as AuthenticatorTransportFuture[];
+  } catch {
+    return [];
+  }
+}
+
+async function listUserPasskeyCredentials(
+  db: D1Database,
+  userId: string,
+): Promise<StoredPasskeyCredential[]> {
+  const rows = await db
+    .prepare(
+      `SELECT id, user_id, credential_id, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at
+         FROM passkey_credentials
+        WHERE user_id = ?1
+        ORDER BY updated_at DESC`,
+    )
+    .bind(userId)
+    .all<StoredPasskeyCredential>();
+  return rows.results ?? [];
 }
 
 function intVar(raw: string | undefined, fallback: number): number {
@@ -372,9 +815,10 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function withCors(response: Response, env: Env): Response {
+function withCors(response: Response, env: Env, request: Request): Response {
+  const app = resolveAppContextSafe(request, env);
   const headers = new Headers(response.headers);
-  for (const [k, v] of Object.entries(corsHeaders(env))) {
+  for (const [k, v] of Object.entries(corsHeaders(env, app, request))) {
     headers.set(k, v);
   }
   return new Response(response.body, {
@@ -384,13 +828,34 @@ function withCors(response: Response, env: Env): Response {
   });
 }
 
-function corsHeaders(env: Env): Record<string, string> {
-  const origin = env.APP_ORIGIN ?? '*';
+function corsHeaders(env: Env, app?: AppContext, request?: Request): Record<string, string> {
+  const requestOrigin = request?.headers.get('origin')?.trim();
+  const allowList = new Set<string>();
+  if (app?.appOrigin) allowList.add(app.appOrigin);
+  for (const item of app?.passkeyExpectedOrigins ?? []) {
+    allowList.add(item);
+  }
+  if (allowList.size === 0) {
+    const legacyOrigin = `${env.APP_ORIGIN ?? ''}`.trim();
+    if (legacyOrigin) allowList.add(legacyOrigin);
+  }
+
+  const allowOrigin = (() => {
+    if (!requestOrigin) {
+      return allowList.values().next().value ?? '*';
+    }
+    if (allowList.size === 0 || allowList.has(requestOrigin)) {
+      return requestOrigin;
+    }
+    return allowList.values().next().value ?? '*';
+  })();
+
   return {
-    'access-control-allow-origin': origin,
+    'access-control-allow-origin': allowOrigin,
     'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-headers': 'content-type,authorization',
+    'access-control-allow-headers': 'content-type,authorization,x-app-id',
     'access-control-max-age': '86400',
+    vary: 'Origin, X-App-Id',
   };
 }
 
@@ -408,7 +873,11 @@ async function signJwt(payload: JsonRecord, secret: string): Promise<string> {
   return `${data}.${signature}`;
 }
 
-async function verifyJwt(token: string, secret: string): Promise<JsonRecord | null> {
+async function verifyJwt(
+  token: string,
+  secret: string,
+  expectedAud?: string,
+): Promise<JsonRecord | null> {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const [h, p, sig] = parts;
@@ -424,7 +893,102 @@ async function verifyJwt(token: string, secret: string): Promise<JsonRecord | nu
   if (!Number.isFinite(exp) || exp <= nowSeconds()) {
     return null;
   }
+  if (expectedAud) {
+    const aud = payload.aud;
+    if (aud == null) {
+      // Backward compatibility: tokens issued before audience support.
+      return payload;
+    }
+    if (typeof aud === 'string') {
+      if (aud !== expectedAud) return null;
+    } else if (Array.isArray(aud)) {
+      const matched = aud.some((item) => `${item ?? ''}`.trim() === expectedAud);
+      if (!matched) return null;
+    } else {
+      return null;
+    }
+  }
   return payload;
+}
+
+function resolveAppContextSafe(request: Request, env: Env): AppContext | undefined {
+  try {
+    return resolveAppContext(request, env);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveAppContext(request: Request, env: Env): AppContext {
+  const appConfigs = readAppConfigs(env.APP_CONFIGS);
+  const defaultAppId = `${env.DEFAULT_APP_ID ?? ''}`.trim().toLowerCase() || DEFAULT_APP_ID;
+  const requested = resolveRequestedAppId(request, defaultAppId);
+
+  if (appConfigs && !appConfigs[requested]) {
+    throw new HttpError(400, 'unknown_app');
+  }
+  const selected = appConfigs?.[requested] ?? {};
+
+  const appName = `${selected.appName ?? env.APP_NAME ?? 'CineDock'}`.trim() || 'CineDock';
+  const appOrigin = normalizeOptionalString(selected.appOrigin ?? env.APP_ORIGIN);
+  const passkeyRpId = normalizeOptionalString(selected.passkeyRpId ?? env.PASSKEY_RP_ID);
+  const passkeyRpName = `${selected.passkeyRpName ?? env.PASSKEY_RP_NAME ?? appName}`.trim() || appName;
+  const passkeyExpectedOrigins = normalizeStringArray(
+    selected.passkeyExpectedOrigins ?? env.PASSKEY_EXPECTED_ORIGINS,
+  );
+
+  return {
+    appId: requested,
+    appName,
+    appOrigin,
+    passkeyRpId,
+    passkeyRpName,
+    passkeyExpectedOrigins,
+  };
+}
+
+function resolveRequestedAppId(request: Request, fallback: string): string {
+  const fromHeader = `${request.headers.get('x-app-id') ?? ''}`.trim().toLowerCase();
+  const fromQuery = new URL(request.url).searchParams.get('app_id')?.trim().toLowerCase() ?? '';
+  const appId = fromHeader || fromQuery || fallback;
+  if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(appId)) {
+    throw new HttpError(400, 'invalid_app_id');
+  }
+  return appId;
+}
+
+function readAppConfigs(raw: string | undefined): AppConfigRecord | null {
+  const text = `${raw ?? ''}`.trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('invalid_app_configs');
+    }
+    return parsed as AppConfigRecord;
+  } catch (error) {
+    console.error('invalid-app-configs', error);
+    throw new HttpError(500, 'invalid_app_configs');
+  }
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  const text = `${value ?? ''}`.trim();
+  return text || undefined;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => `${item ?? ''}`.trim())
+      .filter(Boolean);
+  }
+  const text = `${value ?? ''}`.trim();
+  if (!text) return [];
+  return text
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 async function hmacSha256(data: string, secret: string): Promise<string> {
@@ -461,4 +1025,15 @@ function base64UrlDecodeToString(input: string): string | null {
   } catch {
     return null;
   }
+}
+
+function base64UrlDecode(input: string): Uint8Array {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+  const binary = atob(normalized + padding);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }

@@ -16,10 +16,19 @@ id = "bbc69d76ceb44d63810c920ad3896fda"
 
 [vars]
 APP_NAME = "CineDock"
+DEFAULT_APP_ID = "cinedock"
 ACCESS_TOKEN_TTL_SECONDS = "900"
 REFRESH_TOKEN_TTL_SECONDS = "2592000"
 OTP_TTL_SECONDS = "300"
 OTP_MAX_ATTEMPTS = "5"
+PASSKEY_RP_NAME = "CineDock"
+PASSKEY_CHALLENGE_TTL_SECONDS = "300"
+PASSKEY_RP_ID = "ixiaoxiang.cn"
+PASSKEY_EXPECTED_ORIGINS = "https://ixiaoxiang.cn"
+# APP_CONFIGS = "{\"cinedock\":{\"appName\":\"CineDock\",\"appOrigin\":\"https://app.example.com\",\"passkeyRpId\":\"example.com\",\"passkeyExpectedOrigins\":[\"https://app.example.com\"]}}"
+
+# Required for passkeys:
+# - Ensure apple-app-site-association / assetlinks.json are also configured for this domain
 
 # Secrets you must set with wrangler secret put:
 # - JWT_SECRET

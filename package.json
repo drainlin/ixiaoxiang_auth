@@ -10,5 +10,8 @@
   "devDependencies": {
     "typescript": "^5.9.2",
     "wrangler": "^4.36.0"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "^10.0.1"
   }
 }
