@@ -1,0 +1,27 @@
+name = "ivideo-auth"
+main = "src/index.ts"
+compatibility_date = "2026-03-10"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ivideo-auth"
+database_id = "b11d60cf-c3ad-42a7-bbab-d7cf0ebf49a0"
+
+[[kv_namespaces]]
+binding = "OTP_KV"
+id = "bbc69d76ceb44d63810c920ad3896fda"
+
+[vars]
+APP_NAME = "CineDock"
+ACCESS_TOKEN_TTL_SECONDS = "900"
+REFRESH_TOKEN_TTL_SECONDS = "2592000"
+OTP_TTL_SECONDS = "300"
+OTP_MAX_ATTEMPTS = "5"
+
+# Secrets you must set with wrangler secret put:
+# - JWT_SECRET
+# - MAIL_GATEWAY_URL
+# - MAIL_GATEWAY_TOKEN
