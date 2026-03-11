@@ -11,6 +11,7 @@ This worker provides a serverless auth flow for your app account system:
 - `POST /auth/passkey/register/finish`
 - `POST /auth/passkey/login/start`
 - `POST /auth/passkey/login/finish`
+- `DELETE /auth/passkey/credential`
 
 ## 1) Install
 

@@ -103,6 +103,9 @@ export default {
       if (request.method === 'POST' && path === '/auth/passkey/login/finish') {
         return withCors(await handlePasskeyLoginFinish(request, env), env, request);
       }
+      if (request.method === 'DELETE' && path === '/auth/passkey/credential') {
+        return withCors(await handlePasskeyCredentialDelete(request, env), env, request);
+      }
 
       return withCors(json({ error: 'not_found' }, 404), env, request);
     } catch (error) {
@@ -686,6 +689,20 @@ async function handlePasskeyLoginFinish(request: Request, env: Env): Promise<Res
   }
 }
 
+async function handlePasskeyCredentialDelete(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const deleted = await env.DB.prepare(
+    'DELETE FROM passkey_credentials WHERE user_id = ?1',
+  )
+    .bind(authUser.id)
+    .run();
+
+  return json({ ok: true, deleted: deleted.meta.changes ?? 0 });
+}
+
 async function issueSessionTokens(env: Env, app: AppContext, userId: string, email: string) {
   const now = nowSeconds();
   const accessTtl = intVar(env.ACCESS_TOKEN_TTL_SECONDS, 900);
@@ -988,7 +1005,7 @@ function corsHeaders(env: Env, app?: AppContext, request?: Request): Record<stri
 
   return {
     'access-control-allow-origin': allowOrigin,
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,DELETE,OPTIONS',
     'access-control-allow-headers': 'content-type,authorization,x-app-id',
     'access-control-max-age': '86400',
     vary: 'Origin, X-App-Id',
