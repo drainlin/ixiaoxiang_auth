@@ -25,6 +25,8 @@ PASSKEY_RP_NAME = "CineDock"
 PASSKEY_CHALLENGE_TTL_SECONDS = "300"
 PASSKEY_RP_ID = "www.ixiaoxiang.cn"
 PASSKEY_EXPECTED_ORIGINS = "https://www.ixiaoxiang.cn"
+# DEFAULT_EMAIL_SUBJECT = "{app_name} Verification Code"
+# APP_EMAIL_SUBJECTS = "{\"cinedock\":\"{app_name} 登录验证码\"}"
 # APP_CONFIGS = "{\"cinedock\":{\"appName\":\"CineDock\",\"appOrigin\":\"https://app.example.com\",\"passkeyRpId\":\"example.com\",\"passkeyExpectedOrigins\":[\"https://app.example.com\"]}}"
 
 # Required for passkeys:
@@ -32,5 +34,8 @@ PASSKEY_EXPECTED_ORIGINS = "https://www.ixiaoxiang.cn"
 
 # Secrets you must set with wrangler secret put:
 # - JWT_SECRET
-# - MAIL_GATEWAY_URL
-# - MAIL_GATEWAY_TOKEN
+# - RESEND_API_KEY
+# - RESEND_FROM
+# Optional:
+# - RESEND_REPLY_TO
+# - RESEND_API_URL

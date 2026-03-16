@@ -56,9 +56,23 @@ Copy namespace `id` and replace it in `wrangler.toml`.
 
 ```bash
 npx wrangler secret put JWT_SECRET
-npx wrangler secret put MAIL_GATEWAY_URL
-npx wrangler secret put MAIL_GATEWAY_TOKEN
+npx wrangler secret put RESEND_API_KEY
+npx wrangler secret put RESEND_FROM
 ```
+
+Optional:
+
+```bash
+npx wrangler secret put RESEND_REPLY_TO
+npx wrangler secret put RESEND_API_URL
+```
+
+- `RESEND_FROM` must be a sender under your verified domain in Resend,
+  for example: `Auth <no-reply@mail.yourdomain.com>`.
+- `RESEND_API_URL` default is `https://api.resend.com`; keep default unless you have a proxy.
+- Optional subject template vars:
+  - `DEFAULT_EMAIL_SUBJECT` (default: `{app_name} Verification Code`)
+  - `APP_EMAIL_SUBJECTS` (JSON map by `appId`, e.g. `{"cinedock":"{app_name} 登录验证码"}`)
 
 ## 4.1) Passkey variables
 
@@ -142,7 +156,7 @@ curl -X POST "$WORKER_URL/auth/verify-code" \
 - OTP is stored in KV with TTL.
 - Refresh token is hashed and stored in D1.
 - Access token is signed with `JWT_SECRET`.
-- Email sending is delegated to your self-hosted mail gateway API (`mail-gateway/`).
+- Email sending is handled directly by Resend API from Worker.
 - Passkey start/finish routes use WebAuthn verification and persist credentials in D1.
 - Passkeys are global account credentials and can be used across app ids (if RP/origin configuration allows it).
 - Before passkeys work on mobile, complete domain association:

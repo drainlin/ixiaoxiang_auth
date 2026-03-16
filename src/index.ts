@@ -11,8 +11,12 @@ interface Env {
   DB: D1Database;
   OTP_KV: KVNamespace;
   JWT_SECRET: string;
-  MAIL_GATEWAY_URL: string;
-  MAIL_GATEWAY_TOKEN: string;
+  RESEND_API_KEY: string;
+  RESEND_FROM: string;
+  RESEND_API_URL?: string;
+  RESEND_REPLY_TO?: string;
+  DEFAULT_EMAIL_SUBJECT?: string;
+  APP_EMAIL_SUBJECTS?: string;
   APP_NAME?: string;
   APP_ORIGIN?: string;
   ACCESS_TOKEN_TTL_SECONDS?: string;
@@ -772,30 +776,137 @@ async function sendOtpEmail(args: {
   ttlSeconds: number;
 }) {
   const appName = args.app.appName;
-  const gatewayUrl = `${args.env.MAIL_GATEWAY_URL}`.trim().replace(/\/+$/, '');
-  const token = `${args.env.MAIL_GATEWAY_TOKEN}`.trim();
-  if (!gatewayUrl || !token) {
-    throw new Error('mail_gateway_not_configured');
+  const apiKey = `${args.env.RESEND_API_KEY ?? ''}`.trim();
+  const from = resolveResendFrom(appName, `${args.env.RESEND_FROM ?? ''}`.trim());
+  const endpoint = `${args.env.RESEND_API_URL ?? 'https://api.resend.com'}`.trim().replace(/\/+$/, '');
+  const replyTo = `${args.env.RESEND_REPLY_TO ?? ''}`.trim();
+  if (!apiKey || !from) {
+    throw new Error('resend_not_configured');
   }
-  const response = await fetch(`${gatewayUrl}/send-otp`, {
+  const subject = resolveEmailSubject(args.env, args.app.appId, appName);
+  const safeAppName = escapeHtml(appName);
+  const safeCode = escapeHtml(args.code);
+  const minutes = Math.max(1, Math.floor(args.ttlSeconds / 60));
+  const text = [
+    `${appName} verification code: ${args.code}`,
+    `Expires in ${minutes} minute(s).`,
+    'If you did not request this code, please ignore this email.',
+  ].join('\n');
+  const html = [
+    '<!doctype html>',
+    '<html lang="en">',
+    '  <head>',
+    '    <meta charset="utf-8" />',
+    '    <meta name="viewport" content="width=device-width, initial-scale=1" />',
+    `    <title>${safeAppName} Verification Code</title>`,
+    '  </head>',
+    "  <body style=\"margin:0;padding:0;background:#f3f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:#111827;\">",
+    '    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f9;padding:24px 12px;">',
+    '      <tr>',
+    '        <td align="center">',
+    '          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">',
+    '            <tr>',
+    '              <td style="background:linear-gradient(135deg,#1d4ed8 0%,#0ea5e9 100%);padding:20px 24px;">',
+    `                <div style="font-size:13px;letter-spacing:0.08em;text-transform:uppercase;color:#bfdbfe;">${safeAppName}</div>`,
+    '                <div style="margin-top:6px;font-size:22px;font-weight:700;color:#ffffff;">Verification Code</div>',
+    '              </td>',
+    '            </tr>',
+    '            <tr>',
+    '              <td style="padding:24px;">',
+    `                <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:#374151;">Use this code to continue signing in to <strong>${safeAppName}</strong>.</p>`,
+    '                <div style="margin:18px 0 12px 0;padding:14px 16px;border:1px dashed #93c5fd;border-radius:12px;background:#eff6ff;text-align:center;">',
+    `                  <span style="font-size:34px;line-height:1;font-weight:800;letter-spacing:0.35em;color:#1d4ed8;">${safeCode}</span>`,
+    '                </div>',
+    `                <p style="margin:0 0 10px 0;font-size:14px;line-height:1.6;color:#4b5563;">This code expires in <strong>${minutes} minute(s)</strong>.</p>`,
+    '                <p style="margin:0;font-size:13px;line-height:1.6;color:#6b7280;">If you did not request this email, you can safely ignore it.</p>',
+    '              </td>',
+    '            </tr>',
+    '            <tr>',
+    '              <td style="padding:14px 24px;background:#f9fafb;border-top:1px solid #f3f4f6;">',
+    `                <p style="margin:0;font-size:12px;color:#9ca3af;">&copy; ${safeAppName} • Automated security message</p>`,
+    '              </td>',
+    '            </tr>',
+    '          </table>',
+    '        </td>',
+    '      </tr>',
+    '    </table>',
+    '  </body>',
+    '</html>',
+  ].join('');
+
+  const body: JsonRecord = {
+    from,
+    to: [args.email],
+    subject,
+    html,
+    text,
+  };
+  if (replyTo) {
+    body.reply_to = replyTo;
+  }
+
+  const response = await fetch(`${endpoint}/emails`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      email: args.email,
-      code: args.code,
-      ttl_seconds: args.ttlSeconds,
-      app_id: args.app.appId,
-      app_name: appName,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`send_email_via_gateway_failed:${response.status}:${detail}`);
+    const detail = (await response.text()).slice(0, 500);
+    throw new Error(`send_email_via_resend_failed:${response.status}:${detail}`);
   }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function resolveResendFrom(appName: string, configuredFrom: string): string {
+  const from = configuredFrom.trim();
+  if (!from) return '';
+
+  const match = from.match(/<([^>]+)>/);
+  const email = match ? match[1].trim() : from;
+  if (!email) return '';
+
+  const safeName = appName.replace(/"/g, '').trim();
+  return safeName ? `${safeName} <${email}>` : email;
+}
+
+function resolveEmailSubject(env: Env, appId: string, appName: string): string {
+  const defaultTemplate = `${env.DEFAULT_EMAIL_SUBJECT ?? '{app_name} Verification Code'}`.trim()
+    || '{app_name} Verification Code';
+  const mapRaw = `${env.APP_EMAIL_SUBJECTS ?? ''}`.trim();
+  if (!mapRaw) {
+    return renderSubjectTemplate(defaultTemplate, appId, appName);
+  }
+
+  try {
+    const parsed = JSON.parse(mapRaw) as Record<string, unknown>;
+    if (parsed && typeof parsed === 'object') {
+      const appTemplate = `${parsed[appId] ?? ''}`.trim();
+      const template = appTemplate || defaultTemplate;
+      return renderSubjectTemplate(template, appId, appName);
+    }
+  } catch {
+    // no-op: fallback to default template
+  }
+
+  return renderSubjectTemplate(defaultTemplate, appId, appName);
+}
+
+function renderSubjectTemplate(template: string, appId: string, appName: string): string {
+  return template
+    .replaceAll('{app_name}', appName)
+    .replaceAll('{app_id}', appId || 'default');
 }
 
 async function readJson(request: Request): Promise<JsonRecord> {
