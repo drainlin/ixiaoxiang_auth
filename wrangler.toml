@@ -14,9 +14,14 @@ database_id = "b11d60cf-c3ad-42a7-bbab-d7cf0ebf49a0"
 binding = "OTP_KV"
 id = "bbc69d76ceb44d63810c920ad3896fda"
 
+[[services]]
+binding = "MAIL_GATEWAY"
+service = "mail-gateway"
+
 [vars]
 APP_NAME = "CineDock"
 DEFAULT_APP_ID = "cinedock"
+APP_BUNDLE_ID = "cn.ixiaoxiang.video"
 ACCESS_TOKEN_TTL_SECONDS = "900"
 REFRESH_TOKEN_TTL_SECONDS = "2592000"
 OTP_TTL_SECONDS = "300"
@@ -34,8 +39,6 @@ PASSKEY_EXPECTED_ORIGINS = "https://www.ixiaoxiang.cn"
 
 # Secrets you must set with wrangler secret put:
 # - JWT_SECRET
-# - RESEND_API_KEY
-# - RESEND_FROM
+# - MAIL_GATEWAY_SIGNING_SECRET
 # Optional:
-# - RESEND_REPLY_TO
-# - RESEND_API_URL
+# - MAIL_GATEWAY_TOKEN

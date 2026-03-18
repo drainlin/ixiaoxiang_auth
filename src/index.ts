@@ -10,15 +10,16 @@ import type { AuthenticatorTransportFuture } from '@simplewebauthn/types';
 interface Env {
   DB: D1Database;
   OTP_KV: KVNamespace;
+  MAIL_GATEWAY?: Fetcher;
   JWT_SECRET: string;
-  RESEND_API_KEY: string;
-  RESEND_FROM: string;
-  RESEND_API_URL?: string;
-  RESEND_REPLY_TO?: string;
+  MAIL_GATEWAY_URL?: string;
+  MAIL_GATEWAY_TOKEN?: string;
+  MAIL_GATEWAY_SIGNING_SECRET?: string;
   DEFAULT_EMAIL_SUBJECT?: string;
   APP_EMAIL_SUBJECTS?: string;
   APP_NAME?: string;
   APP_ORIGIN?: string;
+  APP_BUNDLE_ID?: string;
   ACCESS_TOKEN_TTL_SECONDS?: string;
   REFRESH_TOKEN_TTL_SECONDS?: string;
   OTP_TTL_SECONDS?: string;
@@ -35,6 +36,7 @@ type JsonRecord = Record<string, unknown>;
 type AppConfig = {
   appName?: unknown;
   appOrigin?: unknown;
+  appBundleId?: unknown;
   passkeyRpId?: unknown;
   passkeyRpName?: unknown;
   passkeyExpectedOrigins?: unknown;
@@ -45,6 +47,7 @@ type AppContext = {
   appId: string;
   appName: string;
   appOrigin?: string;
+  appBundleId: string;
   passkeyRpId?: string;
   passkeyRpName?: string;
   passkeyExpectedOrigins: string[];
@@ -434,7 +437,7 @@ async function handlePasskeyRegisterStart(request: Request, env: Env): Promise<R
   }
 
   const rpID = resolvePasskeyRpId(env, app);
-  const rpName = app.passkeyRpName;
+  const rpName = app.passkeyRpName ?? app.appName;
   const challengeTtl = intVar(env.PASSKEY_CHALLENGE_TTL_SECONDS, 300);
   const credentials = await listUserPasskeyCredentials(env.DB, userId);
 
@@ -776,12 +779,11 @@ async function sendOtpEmail(args: {
   ttlSeconds: number;
 }) {
   const appName = args.app.appName;
-  const apiKey = `${args.env.RESEND_API_KEY ?? ''}`.trim();
-  const from = resolveResendFrom(appName, `${args.env.RESEND_FROM ?? ''}`.trim());
-  const endpoint = `${args.env.RESEND_API_URL ?? 'https://api.resend.com'}`.trim().replace(/\/+$/, '');
-  const replyTo = `${args.env.RESEND_REPLY_TO ?? ''}`.trim();
-  if (!apiKey || !from) {
-    throw new Error('resend_not_configured');
+  const signingSecret = `${args.env.MAIL_GATEWAY_SIGNING_SECRET ?? ''}`.trim();
+  const token = `${args.env.MAIL_GATEWAY_TOKEN ?? ''}`.trim();
+  const bundleId = `${args.app.appBundleId ?? ''}`.trim();
+  if (!signingSecret || !bundleId) {
+    throw new Error('mail_gateway_not_configured');
   }
   const subject = resolveEmailSubject(args.env, args.app.appId, appName);
   const safeAppName = escapeHtml(appName);
@@ -833,30 +835,55 @@ async function sendOtpEmail(args: {
     '  </body>',
     '</html>',
   ].join('');
-
   const body: JsonRecord = {
-    from,
+    app_id: args.app.appId,
     to: [args.email],
     subject,
     html,
     text,
   };
-  if (replyTo) {
-    body.reply_to = replyTo;
+  const serializedBody = JSON.stringify(body);
+  const timestamp = `${nowSeconds()}`;
+  const nonce = crypto.randomUUID();
+  const bodyHash = await sha256Hex(serializedBody);
+  const canonical = [
+    'POST',
+    '/v1/email/send',
+    args.app.appId,
+    bundleId,
+    timestamp,
+    nonce,
+    bodyHash,
+  ].join('\n');
+  const signature = await hmacSha256Hex(signingSecret, canonical);
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-App-Id': args.app.appId,
+    'X-Bundle-Id': bundleId,
+    'X-Timestamp': timestamp,
+    'X-Nonce': nonce,
+    'X-Signature': signature,
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${endpoint}/emails`, {
+  const requestInit: RequestInit = {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+    headers,
+    body: serializedBody,
+  };
+  const response = args.env.MAIL_GATEWAY
+    ? await args.env.MAIL_GATEWAY.fetch('https://mail-gateway.internal/v1/email/send', requestInit)
+    : await fetch(
+        `${`${args.env.MAIL_GATEWAY_URL ?? ''}`.trim().replace(/\/+$/, '')}/v1/email/send`,
+        requestInit,
+      );
 
   if (!response.ok) {
     const detail = (await response.text()).slice(0, 500);
-    throw new Error(`send_email_via_resend_failed:${response.status}:${detail}`);
+    throw new Error(`send_email_via_mail_gateway_failed:${response.status}:${detail}`);
   }
 }
 
@@ -867,18 +894,6 @@ function escapeHtml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function resolveResendFrom(appName: string, configuredFrom: string): string {
-  const from = configuredFrom.trim();
-  if (!from) return '';
-
-  const match = from.match(/<([^>]+)>/);
-  const email = match ? match[1].trim() : from;
-  if (!email) return '';
-
-  const safeName = appName.replace(/"/g, '').trim();
-  return safeName ? `${safeName} <${email}>` : email;
 }
 
 function resolveEmailSubject(env: Env, appId: string, appName: string): string {
@@ -1195,6 +1210,9 @@ function resolveAppContext(request: Request, env: Env): AppContext {
 
   const appName = `${selected.appName ?? env.APP_NAME ?? 'CineDock'}`.trim() || 'CineDock';
   const appOrigin = normalizeOptionalString(selected.appOrigin ?? env.APP_ORIGIN);
+  const appBundleId =
+    `${selected.appBundleId ?? env.APP_BUNDLE_ID ?? 'cn.ixiaoxiang.video'}`.trim()
+    || 'cn.ixiaoxiang.video';
   const passkeyRpId = normalizeOptionalString(selected.passkeyRpId ?? env.PASSKEY_RP_ID);
   const passkeyRpName = `${selected.passkeyRpName ?? env.PASSKEY_RP_NAME ?? appName}`.trim() || appName;
   const passkeyExpectedOrigins = normalizeStringArray(
@@ -1205,6 +1223,7 @@ function resolveAppContext(request: Request, env: Env): AppContext {
     appId: requested,
     appName,
     appOrigin,
+    appBundleId,
     passkeyRpId,
     passkeyRpName,
     passkeyExpectedOrigins,
@@ -1265,6 +1284,29 @@ async function hmacSha256(data: string, secret: string): Promise<string> {
   );
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   return base64UrlEncode(signature);
+}
+
+async function hmacSha256Hex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(message));
+  return toHex(new Uint8Array(signature));
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(input));
+  return toHex(new Uint8Array(digest));
+}
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 function base64UrlEncode(input: ArrayBuffer | Uint8Array): string {
