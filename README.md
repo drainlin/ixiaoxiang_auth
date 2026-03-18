@@ -56,20 +56,21 @@ Copy namespace `id` and replace it in `wrangler.toml`.
 
 ```bash
 npx wrangler secret put JWT_SECRET
-npx wrangler secret put RESEND_API_KEY
-npx wrangler secret put RESEND_FROM
+npx wrangler secret put MAIL_GATEWAY_SIGNING_SECRET
 ```
 
 Optional:
 
 ```bash
-npx wrangler secret put RESEND_REPLY_TO
-npx wrangler secret put RESEND_API_URL
+npx wrangler secret put MAIL_GATEWAY_TOKEN
+npx wrangler secret put DEFAULT_EMAIL_SUBJECT
+npx wrangler secret put APP_EMAIL_SUBJECTS
 ```
 
-- `RESEND_FROM` must be a sender under your verified domain in Resend,
-  for example: `Auth <no-reply@mail.yourdomain.com>`.
-- `RESEND_API_URL` default is `https://api.resend.com`; keep default unless you have a proxy.
+- `MAIL_GATEWAY_SIGNING_SECRET` is the HMAC key shared with `mail-gateway`.
+- `MAIL_GATEWAY_TOKEN` is optional fallback auth for migration/debug. Signature auth is preferred.
+- `MAIL_GATEWAY` is configured as a Cloudflare service binding in `wrangler.toml`.
+- `APP_BUNDLE_ID` is configured in `wrangler.toml` and sent as `X-Bundle-Id`.
 - Optional subject template vars:
   - `DEFAULT_EMAIL_SUBJECT` (default: `{app_name} Verification Code`)
   - `APP_EMAIL_SUBJECTS` (JSON map by `appId`, e.g. `{"cinedock":"{app_name} 登录验证码"}`)
@@ -156,9 +157,21 @@ curl -X POST "$WORKER_URL/auth/verify-code" \
 - OTP is stored in KV with TTL.
 - Refresh token is hashed and stored in D1.
 - Access token is signed with `JWT_SECRET`.
-- Email sending is handled directly by Resend API from Worker.
+- Email sending is delegated to `mail-gateway`; this Worker signs the request and sends only mail payload.
 - Passkey start/finish routes use WebAuthn verification and persist credentials in D1.
 - Passkeys are global account credentials and can be used across app ids (if RP/origin configuration allows it).
 - Before passkeys work on mobile, complete domain association:
   - iOS: `apple-app-site-association` + Associated Domains (`webcredentials:`)
   - Android: `assetlinks.json` + Digital Asset Links verification
+
+## Pattern
+
+If you add another app in the future, follow the same structure:
+
+- client -> `<app>-auth` / `<app>-notify` -> `mail-gateway`
+- configure `MAIL_GATEWAY` as a Cloudflare service binding
+- keep mail-gateway signing secrets only in the business Worker, never in the client
+
+The shared integration contract is documented in:
+
+- `/Users/yulin/Projects/email-gateway-worker/README.md`
