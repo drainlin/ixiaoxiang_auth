@@ -98,6 +98,21 @@ export default {
       if (request.method === 'POST' && path === '/auth/profile') {
         return withCors(await handleUpdateProfile(request, env), env, request);
       }
+      if (request.method === 'GET' && path === '/sync/bootstrap') {
+        return withCors(await handleSyncBootstrap(request, env), env, request);
+      }
+      if (request.method === 'GET' && path === '/sync/settings') {
+        return withCors(await handleGetSyncSettings(request, env), env, request);
+      }
+      if (request.method === 'PUT' && path === '/sync/settings') {
+        return withCors(await handlePutSyncSettings(request, env), env, request);
+      }
+      if (request.method === 'GET' && path === '/sync/libraries') {
+        return withCors(await handleGetSyncLibraries(request, env), env, request);
+      }
+      if (request.method === 'PUT' && path === '/sync/libraries') {
+        return withCors(await handlePutSyncLibraries(request, env), env, request);
+      }
       if (request.method === 'POST' && path === '/auth/passkey/register/start') {
         return withCors(await handlePasskeyRegisterStart(request, env), env, request);
       }
@@ -359,6 +374,93 @@ async function handleUpdateProfile(request: Request, env: Env): Promise<Response
   });
 }
 
+async function handleSyncBootstrap(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const settings = await readSyncSettings(env.DB, authUser.id, app.appId);
+  const libraries = await readLibraryProfiles(env, authUser.id, app.appId);
+  return json({
+    ok: true,
+    settings,
+    libraries,
+  });
+}
+
+async function handleGetSyncSettings(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+  return json({
+    ok: true,
+    ...(await readSyncSettings(env.DB, authUser.id, app.appId)),
+  });
+}
+
+async function handlePutSyncSettings(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const body = await readJson(request);
+  const payload = body.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return json({ error: 'invalid_payload' }, 400);
+  }
+  const normalizedPayload = payload as JsonRecord;
+  const updatedAt = parseTimestamp(body.updatedAt) ?? Date.now();
+  const current = await readUserSettings(env.DB, authUser.id, app.appId);
+  await writeUserSettings(env.DB, authUser.id, app.appId, {
+    ...current,
+    sync: {
+      schemaVersion: Number(body.schemaVersion ?? 1),
+      updatedAt,
+      deviceId: `${body.deviceId ?? ''}`.trim(),
+      appVersion: `${body.appVersion ?? ''}`.trim(),
+      payload: normalizedPayload,
+    },
+  });
+  return json({
+    ok: true,
+    updatedAt,
+  });
+}
+
+async function handleGetSyncLibraries(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+  return json({
+    ok: true,
+    ...(await readLibraryProfiles(env, authUser.id, app.appId)),
+  });
+}
+
+async function handlePutSyncLibraries(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const body = await readJson(request);
+  const itemsRaw = body.items;
+  if (!Array.isArray(itemsRaw)) {
+    return json({ error: 'invalid_payload' }, 400);
+  }
+  const updatedAt = parseTimestamp(body.updatedAt) ?? Date.now();
+  const items = itemsRaw
+    .map((item) => (item && typeof item === 'object' && !Array.isArray(item)
+      ? item as JsonRecord
+      : null))
+    .filter((item): item is JsonRecord => item !== null);
+
+  await replaceLibraryProfiles(env, authUser.id, app.appId, items, updatedAt);
+  return json({
+    ok: true,
+    updatedAt,
+  });
+}
+
 function validateAvatarDataUrl(input: string): string | null {
   if (!input) return null;
   if (!input.startsWith('data:image/')) return 'invalid_payload';
@@ -388,6 +490,31 @@ async function readUserSettings(
   return parsed ?? {};
 }
 
+async function readSyncSettings(
+  db: D1Database,
+  userId: string,
+  appId: string,
+): Promise<JsonRecord> {
+  const current = await readUserSettings(db, userId, appId);
+  const sync = current.sync;
+  if (!sync || typeof sync !== 'object' || Array.isArray(sync)) {
+    return {
+      payload: {},
+      updatedAt: 0,
+      schemaVersion: 1,
+    };
+  }
+  const map = sync as JsonRecord;
+  return {
+    payload:
+      map.payload && typeof map.payload === 'object' && !Array.isArray(map.payload)
+        ? map.payload
+        : {},
+    updatedAt: parseTimestamp(map.updatedAt) ?? 0,
+    schemaVersion: Number(map.schemaVersion ?? 1),
+  };
+}
+
 async function writeUserSettings(
   db: D1Database,
   userId: string,
@@ -405,6 +532,120 @@ async function writeUserSettings(
     )
     .bind(userId, appId, JSON.stringify(payload), now)
     .run();
+}
+
+async function readLibraryProfiles(
+  env: Env,
+  userId: string,
+  appId: string,
+): Promise<JsonRecord> {
+  const rows = await env.DB
+    .prepare(
+      `SELECT id, display_name, provider_type, server_url, username, encrypted_secret, meta_json, updated_at
+         FROM library_profiles
+        WHERE user_id = ?1 AND app_id = ?2
+        ORDER BY updated_at DESC, id ASC`,
+    )
+    .bind(userId, appId)
+    .all<{
+      id: string;
+      display_name: string;
+      provider_type: string;
+      server_url: string;
+      username: string | null;
+      encrypted_secret: string | null;
+      meta_json: string | null;
+      updated_at: number;
+    }>();
+  const items = await Promise.all(
+    (rows.results ?? []).map(async (row: {
+      id: string;
+      display_name: string;
+      provider_type: string;
+      server_url: string;
+      username: string | null;
+      encrypted_secret: string | null;
+      meta_json: string | null;
+      updated_at: number;
+    }) => {
+      const meta = row.meta_json ? parseJson(row.meta_json) ?? {} : {};
+      const secret = row.encrypted_secret
+        ? await decryptJsonRecord(env, appId, row.encrypted_secret)
+        : {};
+      return {
+        id: row.id,
+        displayName: row.display_name,
+        providerType: row.provider_type,
+        serverUrl: row.server_url,
+        username: row.username ?? '',
+        meta,
+        secret,
+        updatedAt: row.updated_at,
+        createdAt: `${(meta.createdAt ?? '')}`.trim(),
+      };
+    }),
+  );
+  const updatedAt = items.reduce<number>(
+    (max: number, item: { updatedAt: number }) =>
+      Math.max(max, parseTimestamp(item.updatedAt) ?? 0),
+    0,
+  );
+  return {
+    items,
+    updatedAt,
+    schemaVersion: 1,
+  };
+}
+
+async function replaceLibraryProfiles(
+  env: Env,
+  userId: string,
+  appId: string,
+  items: JsonRecord[],
+  updatedAt: number,
+): Promise<void> {
+  await env.DB
+    .prepare('DELETE FROM library_profiles WHERE user_id = ?1 AND app_id = ?2')
+    .bind(userId, appId)
+    .run();
+
+  for (const item of items) {
+    const id = `${item.id ?? ''}`.trim();
+    const displayName = `${item.displayName ?? ''}`.trim();
+    const providerType = `${item.providerType ?? ''}`.trim() || 'emby';
+    const serverUrl = `${item.serverUrl ?? ''}`.trim();
+    const username = `${item.username ?? ''}`.trim();
+    if (!id || !displayName || !serverUrl) {
+      continue;
+    }
+    const meta = item.meta && typeof item.meta === 'object' && !Array.isArray(item.meta)
+      ? { ...(item.meta as JsonRecord), createdAt: `${item.createdAt ?? ''}`.trim() }
+      : { createdAt: `${item.createdAt ?? ''}`.trim() };
+    const secret = item.secret && typeof item.secret === 'object' && !Array.isArray(item.secret)
+      ? item.secret as JsonRecord
+      : {};
+    const encryptedSecret = await encryptJsonRecord(env, appId, secret);
+    await env.DB
+      .prepare(
+        `INSERT INTO library_profiles (
+            id, user_id, app_id, provider_type, display_name, server_url,
+            username, encrypted_secret, meta_json, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+      )
+      .bind(
+        id,
+        userId,
+        appId,
+        providerType,
+        displayName,
+        serverUrl,
+        username,
+        encryptedSecret,
+        JSON.stringify(meta),
+        Math.floor(updatedAt / 1000),
+      )
+      .run();
+  }
 }
 
 type AuthUser = { id: string; email: string };
@@ -707,7 +948,7 @@ async function handlePasskeyCredentialDelete(request: Request, env: Env): Promis
     .bind(authUser.id)
     .run();
 
-  return json({ ok: true, deleted: deleted.meta.changes ?? 0 });
+  return json({ ok: true, deleted: deleted.meta?.changes ?? 0 });
 }
 
 async function issueSessionTokens(env: Env, app: AppContext, userId: string, email: string) {
@@ -1131,7 +1372,7 @@ function corsHeaders(env: Env, app?: AppContext, request?: Request): Record<stri
 
   return {
     'access-control-allow-origin': allowOrigin,
-    'access-control-allow-methods': 'GET,POST,DELETE,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
     'access-control-allow-headers': 'content-type,authorization,x-app-id',
     'access-control-max-age': '86400',
     vary: 'Origin, X-App-Id',
@@ -1342,4 +1583,67 @@ function base64UrlDecode(input: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+function parseTimestamp(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  const parsed = Number.parseInt(`${value ?? ''}`, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function deriveSyncKey(secret: string, appId: string): Promise<CryptoKey> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    encoder.encode(`${secret}:${appId}:sync`),
+  );
+  return crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+async function encryptJsonRecord(
+  env: Env,
+  appId: string,
+  payload: JsonRecord,
+): Promise<string> {
+  const key = await deriveSyncKey(env.JWT_SECRET, appId);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = encoder.encode(JSON.stringify(payload));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encoded,
+  );
+  return `${base64UrlEncode(iv)}.${base64UrlEncode(ciphertext)}`;
+}
+
+async function decryptJsonRecord(
+  env: Env,
+  appId: string,
+  value: string,
+): Promise<JsonRecord> {
+  const [ivRaw, dataRaw] = value.split('.', 2);
+  if (!ivRaw || !dataRaw) return {};
+  try {
+    const key = await deriveSyncKey(env.JWT_SECRET, appId);
+    const iv = base64UrlDecode(ivRaw);
+    const ivBuffer = iv.buffer.slice(
+      iv.byteOffset,
+      iv.byteOffset + iv.byteLength,
+    ) as ArrayBuffer;
+    const data = base64UrlDecode(dataRaw);
+    const dataBuffer = data.buffer.slice(
+      data.byteOffset,
+      data.byteOffset + data.byteLength,
+    ) as ArrayBuffer;
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: ivBuffer },
+      key,
+      dataBuffer,
+    );
+    const decoded = new TextDecoder().decode(plaintext);
+    return parseJson(decoded) ?? {};
+  } catch {
+    return {};
+  }
 }
