@@ -78,7 +78,7 @@ export default {
       }
 
       const url = new URL(request.url);
-      const path = url.pathname.replace(/\/+$/, '') || '/';
+      const path = normalizeApiPath(url.pathname);
 
       if (request.method === 'POST' && path === '/auth/send-code') {
         return withCors(await handleSendCode(request, env), env, request);
@@ -1479,6 +1479,15 @@ function resolveRequestedAppId(request: Request, fallback: string): string {
     throw new HttpError(400, 'invalid_app_id');
   }
   return appId;
+}
+
+function normalizeApiPath(pathname: string): string {
+  const normalized = pathname.replace(/\/+$/, '') || '/';
+  if (normalized === '/video') return '/';
+  if (normalized.startsWith('/video/')) {
+    return normalized.slice('/video'.length) || '/';
+  }
+  return normalized;
 }
 
 function readAppConfigs(raw: string | undefined): AppConfigRecord | null {

@@ -44,8 +44,8 @@ declare namespace Cloudflare {
     OTP_MAX_ATTEMPTS: '5';
     PASSKEY_RP_NAME: 'CineDock';
     PASSKEY_CHALLENGE_TTL_SECONDS: '300';
-    PASSKEY_RP_ID: 'www.ixiaoxiang.cn';
-    PASSKEY_EXPECTED_ORIGINS: 'https://www.ixiaoxiang.cn';
+    PASSKEY_RP_ID: 'ixiaoxiang.cn';
+    PASSKEY_EXPECTED_ORIGINS: 'https://ixiaoxiang.cn';
     MAIL_GATEWAY: Fetcher;
   }
 }
