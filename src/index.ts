@@ -319,18 +319,15 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
     return json({ error: 'user_not_found' }, 404);
   }
 
-  const settings = await readUserSettings(env.DB, user.id, app.appId);
-  const profile = settings.profile && typeof settings.profile === 'object'
-    ? settings.profile as JsonRecord
-    : null;
-  const displayName = `${profile?.displayName ?? ''}`.trim();
-  const avatarDataUrl = `${profile?.avatarDataUrl ?? ''}`.trim();
+  const profile = await readUserProfile(env.DB, user.id);
+  const displayName = profile?.displayName ?? '';
+  const avatarDataUrl = profile?.avatarDataUrl ?? '';
 
   return json({
     ok: true,
     user: {
       ...user,
-      display_name: displayName || user.email.split('@')[0] || 'CineDock User',
+      display_name: displayName || user.email.split('@')[0] || `${app.appName} User`,
       avatar_url: avatarDataUrl,
     },
   });
@@ -351,19 +348,10 @@ async function handleUpdateProfile(request: Request, env: Env): Promise<Response
     return json({ error: avatarError }, 400);
   }
 
-  const current = await readUserSettings(env.DB, authUser.id, app.appId);
-  const next: JsonRecord = {
-    ...current,
-    profile: {
-      ...(current.profile && typeof current.profile === 'object'
-          ? current.profile as JsonRecord
-          : {}),
-      displayName,
-      avatarDataUrl,
-      updatedAt: nowSeconds(),
-    },
-  };
-  await writeUserSettings(env.DB, authUser.id, app.appId, next);
+  await writeUserProfile(env.DB, authUser.id, {
+    displayName,
+    avatarDataUrl,
+  });
 
   return json({
     ok: true,
@@ -490,6 +478,23 @@ async function readUserSettings(
   return parsed ?? {};
 }
 
+async function readUserProfile(
+  db: D1Database,
+  userId: string,
+): Promise<{ displayName: string; avatarDataUrl: string } | null> {
+  const row = await db
+    .prepare(
+      'SELECT display_name, avatar_data_url FROM user_profiles WHERE user_id = ?1 LIMIT 1',
+    )
+    .bind(userId)
+    .first<{ display_name: string | null; avatar_data_url: string | null }>();
+  if (!row) return null;
+  return {
+    displayName: `${row.display_name ?? ''}`.trim(),
+    avatarDataUrl: `${row.avatar_data_url ?? ''}`.trim(),
+  };
+}
+
 async function readSyncSettings(
   db: D1Database,
   userId: string,
@@ -531,6 +536,25 @@ async function writeUserSettings(
          updated_at = excluded.updated_at`,
     )
     .bind(userId, appId, JSON.stringify(payload), now)
+    .run();
+}
+
+async function writeUserProfile(
+  db: D1Database,
+  userId: string,
+  profile: { displayName: string; avatarDataUrl: string },
+): Promise<void> {
+  const now = nowSeconds();
+  await db
+    .prepare(
+      `INSERT INTO user_profiles (user_id, display_name, avatar_data_url, updated_at)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(user_id) DO UPDATE SET
+         display_name = excluded.display_name,
+         avatar_data_url = excluded.avatar_data_url,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, profile.displayName, profile.avatarDataUrl, now)
     .run();
 }
 
