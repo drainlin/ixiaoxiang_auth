@@ -125,6 +125,18 @@ export default {
       if (request.method === 'POST' && path === '/auth/passkey/login/finish') {
         return withCors(await handlePasskeyLoginFinish(request, env), env, request);
       }
+      if (request.method === 'GET' && path === '/auth/passkey/settings') {
+        return withCors(await handleGetPasskeySettings(request, env), env, request);
+      }
+      if (request.method === 'PATCH' && path === '/auth/passkey/settings') {
+        return withCors(await handlePatchPasskeySettings(request, env), env, request);
+      }
+      if (request.method === 'GET' && path === '/auth/passkey/credentials') {
+        return withCors(await handlePasskeyCredentialsList(request, env), env, request);
+      }
+      if (request.method === 'PATCH' && path === '/auth/passkey/credential') {
+        return withCors(await handlePasskeyCredentialUpdate(request, env), env, request);
+      }
       if (request.method === 'DELETE' && path === '/auth/passkey/credential') {
         return withCors(await handlePasskeyCredentialDelete(request, env), env, request);
       }
@@ -322,6 +334,8 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
   const profile = await readUserProfile(env.DB, user.id);
   const displayName = profile?.displayName ?? '';
   const avatarDataUrl = profile?.avatarDataUrl ?? '';
+  const passkeyLoginEnabled = profile?.passkeyLoginEnabled ?? true;
+  const passkeys = await listUserPasskeyCredentials(env.DB, user.id);
 
   return json({
     ok: true,
@@ -329,7 +343,9 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
       ...user,
       display_name: displayName || user.email.split('@')[0] || `${app.appName} User`,
       avatar_url: avatarDataUrl,
+      passkey_login_enabled: passkeyLoginEnabled,
     },
+    passkeys: passkeys.map(serializePasskeyCredential),
   });
 }
 
@@ -359,6 +375,36 @@ async function handleUpdateProfile(request: Request, env: Env): Promise<Response
       displayName,
       avatarUrl: avatarDataUrl,
     },
+  });
+}
+
+async function handleGetPasskeySettings(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const profile = await readUserProfile(env.DB, authUser.id);
+  return json({
+    ok: true,
+    passkeyLoginEnabled: profile?.passkeyLoginEnabled ?? true,
+  });
+}
+
+async function handlePatchPasskeySettings(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const body = await readJson(request);
+  const enabled = body.passkeyLoginEnabled;
+  if (typeof enabled !== 'boolean') {
+    return json({ error: 'invalid_payload' }, 400);
+  }
+
+  await upsertPasskeyLoginEnabled(env.DB, authUser.id, enabled);
+  return json({
+    ok: true,
+    passkeyLoginEnabled: enabled,
   });
 }
 
@@ -481,17 +527,22 @@ async function readUserSettings(
 async function readUserProfile(
   db: D1Database,
   userId: string,
-): Promise<{ displayName: string; avatarDataUrl: string } | null> {
+): Promise<{ displayName: string; avatarDataUrl: string; passkeyLoginEnabled: boolean } | null> {
   const row = await db
     .prepare(
-      'SELECT display_name, avatar_data_url FROM user_profiles WHERE user_id = ?1 LIMIT 1',
+      'SELECT display_name, avatar_data_url, passkey_login_enabled FROM user_profiles WHERE user_id = ?1 LIMIT 1',
     )
     .bind(userId)
-    .first<{ display_name: string | null; avatar_data_url: string | null }>();
+    .first<{
+      display_name: string | null;
+      avatar_data_url: string | null;
+      passkey_login_enabled: number | null;
+    }>();
   if (!row) return null;
   return {
     displayName: `${row.display_name ?? ''}`.trim(),
     avatarDataUrl: `${row.avatar_data_url ?? ''}`.trim(),
+    passkeyLoginEnabled: Number(row.passkey_login_enabled ?? 1) === 1,
   };
 }
 
@@ -555,6 +606,24 @@ async function writeUserProfile(
          updated_at = excluded.updated_at`,
     )
     .bind(userId, profile.displayName, profile.avatarDataUrl, now)
+    .run();
+}
+
+async function upsertPasskeyLoginEnabled(
+  db: D1Database,
+  userId: string,
+  enabled: boolean,
+): Promise<void> {
+  const now = nowSeconds();
+  await db
+    .prepare(
+      `INSERT INTO user_profiles (user_id, display_name, avatar_data_url, passkey_login_enabled, updated_at)
+       VALUES (?1, NULL, NULL, ?2, ?3)
+       ON CONFLICT(user_id) DO UPDATE SET
+         passkey_login_enabled = excluded.passkey_login_enabled,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, enabled ? 1 : 0, now)
     .run();
 }
 
@@ -678,6 +747,7 @@ type StoredPasskeyCredential = {
   id: string;
   user_id: string;
   credential_id: string;
+  alias: string;
   public_key_b64url: string;
   counter: number;
   transports_json: string | null;
@@ -686,6 +756,19 @@ type StoredPasskeyCredential = {
   created_at: number;
   updated_at: number;
   last_used_at: number | null;
+};
+
+type PasskeyCredentialItem = {
+  credentialId: string;
+  alias: string;
+  addedAt: number;
+  deviceType: string | null;
+  backedUp: boolean;
+  transports: AuthenticatorTransportFuture[];
+  counter: number;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt: number | null;
 };
 
 async function handlePasskeyRegisterStart(request: Request, env: Env): Promise<Response> {
@@ -791,10 +874,11 @@ async function handlePasskeyRegisterFinish(request: Request, env: Env): Promise<
   const now = nowSeconds();
   await env.DB.prepare(
     `INSERT INTO passkey_credentials
-      (id, user_id, credential_id, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?9)
+      (id, user_id, credential_id, alias, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10)
      ON CONFLICT(credential_id) DO UPDATE SET
       user_id = excluded.user_id,
+      alias = COALESCE(NULLIF(alias, ''), excluded.alias),
       public_key_b64url = excluded.public_key_b64url,
       counter = excluded.counter,
       transports_json = excluded.transports_json,
@@ -807,6 +891,7 @@ async function handlePasskeyRegisterFinish(request: Request, env: Env): Promise<
       crypto.randomUUID(),
       authUser.id,
       info.credentialID,
+      '',
       base64UrlEncode(info.credentialPublicKey),
       info.counter,
       JSON.stringify(transports),
@@ -818,6 +903,46 @@ async function handlePasskeyRegisterFinish(request: Request, env: Env): Promise<
 
   await env.OTP_KV.delete(passkeyRegisterChallengeKey(app.appId, authUser.id));
   return json({ ok: true });
+}
+
+async function handlePasskeyCredentialsList(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const credentials = await listUserPasskeyCredentials(env.DB, authUser.id);
+  return json({
+    ok: true,
+    items: credentials.map(serializePasskeyCredential),
+  });
+}
+
+async function handlePasskeyCredentialUpdate(request: Request, env: Env): Promise<Response> {
+  const app = resolveAppContext(request, env);
+  const authUser = await requireAuthUser(request, env, app);
+  if (!authUser) return json({ error: 'invalid_access_token' }, 401);
+
+  const body = await readJson(request);
+  const credentialId = `${body.credentialId ?? ''}`.trim();
+  const alias = `${body.alias ?? ''}`.trim();
+  if (!credentialId || alias.length > 80) {
+    return json({ error: 'invalid_payload' }, 400);
+  }
+
+  const now = nowSeconds();
+  const result = await env.DB.prepare(
+    `UPDATE passkey_credentials
+        SET alias = ?1,
+            updated_at = ?2
+      WHERE user_id = ?3 AND credential_id = ?4`,
+  )
+    .bind(alias, now, authUser.id, credentialId)
+    .run();
+
+  return json({
+    ok: true,
+    updated: result.meta?.changes ?? 0,
+  });
 }
 
 async function handlePasskeyLoginStart(request: Request, env: Env): Promise<Response> {
@@ -838,6 +963,11 @@ async function handlePasskeyLoginStart(request: Request, env: Env): Promise<Resp
       .first<{ id: string; email: string }>();
     if (!user) {
       return json({ error: 'passkey_no_credentials' }, 404);
+    }
+
+    const passkeyLoginEnabled = await isPasskeyLoginEnabled(env.DB, user.id);
+    if (!passkeyLoginEnabled) {
+      return json({ error: 'passkey_login_disabled' }, 403);
     }
 
     const credentials = await listUserPasskeyCredentials(env.DB, user.id);
@@ -898,13 +1028,18 @@ async function handlePasskeyLoginFinish(request: Request, env: Env): Promise<Res
   if (!credentialId) return json({ error: 'invalid_payload' }, 400);
 
   const dbCredential = await env.DB.prepare(
-    `SELECT id, user_id, credential_id, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at
+    `SELECT id, user_id, credential_id, alias, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at
        FROM passkey_credentials
       WHERE credential_id = ?1 LIMIT 1`,
   )
     .bind(credentialId)
     .first<StoredPasskeyCredential>();
   if (!dbCredential) return json({ error: 'passkey_no_credentials' }, 404);
+
+  const passkeyLoginEnabled = await isPasskeyLoginEnabled(env.DB, dbCredential.user_id);
+  if (!passkeyLoginEnabled) {
+    return json({ error: 'passkey_login_disabled' }, 403);
+  }
 
   const challengeUserId = `${challengeState.userId ?? ''}`.trim();
   const challengeAppId = `${challengeState.appId ?? ''}`.trim();
@@ -966,11 +1101,16 @@ async function handlePasskeyCredentialDelete(request: Request, env: Env): Promis
   const authUser = await requireAuthUser(request, env, app);
   if (!authUser) return json({ error: 'invalid_access_token' }, 401);
 
-  const deleted = await env.DB.prepare(
-    'DELETE FROM passkey_credentials WHERE user_id = ?1',
-  )
-    .bind(authUser.id)
-    .run();
+  const body = await readJson(request);
+  const credentialId = `${body.credentialId ?? ''}`.trim();
+  const deleted = credentialId
+    ? await env.DB
+        .prepare('DELETE FROM passkey_credentials WHERE user_id = ?1 AND credential_id = ?2')
+        .bind(authUser.id, credentialId)
+        .run()
+    : await env.DB.prepare('DELETE FROM passkey_credentials WHERE user_id = ?1')
+        .bind(authUser.id)
+        .run();
 
   return json({ ok: true, deleted: deleted.meta?.changes ?? 0 });
 }
@@ -1331,14 +1471,37 @@ async function listUserPasskeyCredentials(
 ): Promise<StoredPasskeyCredential[]> {
   const rows = await db
     .prepare(
-      `SELECT id, user_id, credential_id, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at
+      `SELECT id, user_id, credential_id, alias, public_key_b64url, counter, transports_json, device_type, backed_up, created_at, updated_at, last_used_at
          FROM passkey_credentials
         WHERE user_id = ?1
-        ORDER BY updated_at DESC`,
+        ORDER BY updated_at DESC, created_at DESC, credential_id ASC`,
     )
     .bind(userId)
     .all<StoredPasskeyCredential>();
   return rows.results ?? [];
+}
+
+function serializePasskeyCredential(item: StoredPasskeyCredential): PasskeyCredentialItem {
+  return {
+    credentialId: item.credential_id,
+    alias: `${item.alias ?? ''}`.trim(),
+    addedAt: Number(item.created_at ?? 0),
+    deviceType: `${item.device_type ?? ''}`.trim() || null,
+    backedUp: Number(item.backed_up ?? 0) === 1,
+    transports: parseTransports(item.transports_json),
+    counter: Number(item.counter ?? 0),
+    createdAt: Number(item.created_at ?? 0),
+    updatedAt: Number(item.updated_at ?? 0),
+    lastUsedAt: item.last_used_at == null ? null : Number(item.last_used_at),
+  };
+}
+
+async function isPasskeyLoginEnabled(db: D1Database, userId: string): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT passkey_login_enabled FROM user_profiles WHERE user_id = ?1 LIMIT 1')
+    .bind(userId)
+    .first<{ passkey_login_enabled: number | null }>();
+  return Number(row?.passkey_login_enabled ?? 1) === 1;
 }
 
 function intVar(raw: string | undefined, fallback: number): number {
@@ -1396,7 +1559,7 @@ function corsHeaders(env: Env, app?: AppContext, request?: Request): Record<stri
 
   return {
     'access-control-allow-origin': allowOrigin,
-    'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
     'access-control-allow-headers': 'content-type,authorization,x-app-id',
     'access-control-max-age': '86400',
     vary: 'Origin, X-App-Id',

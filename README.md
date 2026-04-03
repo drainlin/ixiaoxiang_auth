@@ -11,6 +11,10 @@ This worker provides a serverless auth flow for your app account system:
 - `POST /auth/passkey/register/finish`
 - `POST /auth/passkey/login/start`
 - `POST /auth/passkey/login/finish`
+- `GET /auth/passkey/settings`
+- `PATCH /auth/passkey/settings`
+- `GET /auth/passkey/credentials`
+- `PATCH /auth/passkey/credential`
 - `DELETE /auth/passkey/credential`
 
 ## 1) Install
@@ -152,6 +156,49 @@ curl -X POST "$WORKER_URL/auth/verify-code" \
   -d '{"email":"you@example.com","code":"123456","purpose":"login"}'
 ```
 
+### List passkeys
+
+```bash
+curl "$WORKER_URL/auth/passkey/credentials" \
+  -H "authorization: Bearer $ACCESS_TOKEN"
+```
+
+### Read passkey login setting
+
+```bash
+curl "$WORKER_URL/auth/passkey/settings" \
+  -H "authorization: Bearer $ACCESS_TOKEN"
+```
+
+### Toggle passkey login
+
+```bash
+curl -X PATCH "$WORKER_URL/auth/passkey/settings" \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"passkeyLoginEnabled":true}'
+```
+
+### Update passkey alias
+
+```bash
+curl -X PATCH "$WORKER_URL/auth/passkey/credential" \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"credentialId":"abc123","alias":"MacBook Pro"}'
+```
+
+### Delete passkey
+
+```bash
+curl -X DELETE "$WORKER_URL/auth/passkey/credential" \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"credentialId":"abc123"}'
+```
+
+Legacy clients may omit `credentialId` to delete all passkeys for the current user.
+
 ## Notes
 
 - OTP is stored in KV with TTL.
@@ -159,6 +206,14 @@ curl -X POST "$WORKER_URL/auth/verify-code" \
 - Access token is signed with `JWT_SECRET`.
 - Email sending is delegated to `mail-gateway`; this Worker signs the request and sends only mail payload.
 - Passkey start/finish routes use WebAuthn verification and persist credentials in D1.
+- `GET /auth/me` also returns the current user's passkey list for profile screens.
+- `GET /auth/me` also returns `passkey_login_enabled` for the current user.
+- `GET /auth/passkey/settings` returns the current user's passkey login toggle.
+- `PATCH /auth/passkey/settings` updates the current user's passkey login toggle.
+- `GET /auth/passkey/credentials` returns the current user's passkey list for the frontend.
+- `PATCH /auth/passkey/credential` updates a single passkey alias.
+- `DELETE /auth/passkey/credential` deletes a single passkey by `credentialId`; legacy clients may omit it to delete all passkeys.
+- Each passkey item includes `addedAt` as the creation timestamp.
 - Passkeys are global account credentials and can be used across app ids (if RP/origin configuration allows it).
 - Before passkeys work on mobile, complete domain association:
   - iOS: `apple-app-site-association` + Associated Domains (`webcredentials:`)
