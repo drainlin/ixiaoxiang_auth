@@ -34,7 +34,7 @@ PASSKEY_CHALLENGE_TTL_SECONDS = "300"
 PASSKEY_RP_ID = "ixiaoxiang.cn"
 PASSKEY_EXPECTED_ORIGINS = "https://ixiaoxiang.cn,https://music.ixiaoxiang.cn"
 APP_EMAIL_SUBJECTS = "{\"cinedock\":\"{app_name} Login Code\",\"echospace\":\"{app_name} Login Code\"}"
-APP_CONFIGS = "{\"cinedock\":{\"appName\":\"CineDock\",\"appOrigin\":\"https://ixiaoxiang.cn\",\"appBundleId\":\"cn.ixiaoxiang.video\",\"passkeyRpId\":\"ixiaoxiang.cn\",\"passkeyRpName\":\"CineDock\",\"passkeyExpectedOrigins\":[\"https://ixiaoxiang.cn\"]},\"echospace\":{\"appName\":\"EchoSpace\",\"appOrigin\":\"https://music.ixiaoxiang.cn\",\"appBundleId\":\"cn.ixiaoxiang.music\",\"passkeyRpId\":\"ixiaoxiang.cn\",\"passkeyRpName\":\"EchoSpace\",\"passkeyExpectedOrigins\":[\"https://music.ixiaoxiang.cn\"]}}"
+APP_CONFIGS = "{\"cinedock\":{\"appName\":\"CineDock\",\"appOrigin\":\"https://ixiaoxiang.cn\",\"appBundleId\":\"cn.ixiaoxiang.video\",\"passkeyRpId\":\"ixiaoxiang.cn\",\"passkeyRpName\":\"CineDock\",\"passkeyExpectedOrigins\":[\"https://ixiaoxiang.cn\"]},\"echospace\":{\"appName\":\"EchoSpace\",\"appOrigin\":\"https://ixiaoxiang.cn\",\"appBundleId\":\"cn.ixiaoxiang.music\",\"passkeyRpId\":\"ixiaoxiang.cn\",\"passkeyRpName\":\"EchoSpace\",\"passkeyExpectedOrigins\":[\"https://ixiaoxiang.cn\"]}}"
 
 # Required for passkeys:
 # - Ensure apple-app-site-association / assetlinks.json are also configured for this domain

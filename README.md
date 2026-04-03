@@ -121,11 +121,11 @@ Recommended config shape:
   },
   "echospace": {
     "appName": "EchoSpace",
-    "appOrigin": "https://music.ixiaoxiang.cn",
+    "appOrigin": "https://ixiaoxiang.cn",
     "appBundleId": "cn.ixiaoxiang.music",
     "passkeyRpId": "ixiaoxiang.cn",
     "passkeyRpName": "EchoSpace",
-    "passkeyExpectedOrigins": ["https://music.ixiaoxiang.cn"]
+    "passkeyExpectedOrigins": ["https://ixiaoxiang.cn"]
   }
 }
 ```
