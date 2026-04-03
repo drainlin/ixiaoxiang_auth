@@ -1,4 +1,4 @@
-name = "ivideo-auth"
+name = "auth-worker"
 main = "src/index.ts"
 compatibility_date = "2026-03-10"
 
@@ -7,7 +7,7 @@ enabled = true
 
 [[d1_databases]]
 binding = "DB"
-database_name = "ivideo-auth"
+database_name = "auth-worker"
 database_id = "b11d60cf-c3ad-42a7-bbab-d7cf0ebf49a0"
 
 [[kv_namespaces]]
@@ -19,19 +19,22 @@ binding = "MAIL_GATEWAY"
 service = "mail-gateway"
 
 [vars]
-APP_NAME = "CineDock"
-DEFAULT_APP_ID = "cinedock"
-APP_BUNDLE_ID = "cn.ixiaoxiang.video"
+APP_NAME = "Auth Service"
+DEFAULT_APP_ID = "default"
+APP_BUNDLE_ID = "com.example.auth"
+DEFAULT_APP_NAME = "Auth Service"
+DEFAULT_APP_ORIGIN = "https://auth.example.com"
+DEFAULT_APP_BUNDLE_ID = "com.example.auth"
 ACCESS_TOKEN_TTL_SECONDS = "900"
 REFRESH_TOKEN_TTL_SECONDS = "2592000"
 OTP_TTL_SECONDS = "300"
 OTP_MAX_ATTEMPTS = "5"
-PASSKEY_RP_NAME = "CineDock"
+PASSKEY_RP_NAME = "Auth Service"
 PASSKEY_CHALLENGE_TTL_SECONDS = "300"
-PASSKEY_RP_ID = "ixiaoxiang.cn"
-PASSKEY_EXPECTED_ORIGINS = "https://ixiaoxiang.cn,android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s"
-APP_EMAIL_SUBJECTS = "{\"cinedock\":\"{app_name} 登录验证码\",\"echospace\":\"{app_name} 登录验证码\"}"
-APP_CONFIGS = "{\"cinedock\":{\"appName\":\"CineDock\",\"appOrigin\":\"https://ixiaoxiang.cn\",\"appBundleId\":\"cn.ixiaoxiang.video\",\"passkeyRpId\":\"ixiaoxiang.cn\",\"passkeyRpName\":\"CineDock\",\"passkeyExpectedOrigins\":[\"https://ixiaoxiang.cn\",\"android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s\"]},\"echospace\":{\"appName\":\"EchoSpace\",\"appOrigin\":\"https://ixiaoxiang.cn\",\"appBundleId\":\"cn.ixiaoxiang.music\",\"passkeyRpId\":\"ixiaoxiang.cn\",\"passkeyRpName\":\"EchoSpace\",\"passkeyExpectedOrigins\":[\"https://ixiaoxiang.cn\",\"android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s\"]}}"
+PASSKEY_RP_ID = "auth.example.com"
+PASSKEY_EXPECTED_ORIGINS = "https://auth.example.com"
+APP_EMAIL_SUBJECTS = "{\"app1\":\"{app_name} Login Code\",\"app2\":\"{app_name} Login Code\"}"
+APP_CONFIGS = "{\"app1\":{\"appName\":\"App One\",\"appOrigin\":\"https://app1.example.com\",\"appBundleId\":\"com.example.app1\",\"passkeyRpId\":\"auth.example.com\",\"passkeyRpName\":\"App One\",\"passkeyExpectedOrigins\":[\"https://app1.example.com\"]},\"app2\":{\"appName\":\"App Two\",\"appOrigin\":\"https://app2.example.com\",\"appBundleId\":\"com.example.app2\",\"passkeyRpId\":\"auth.example.com\",\"passkeyRpName\":\"App Two\",\"passkeyExpectedOrigins\":[\"https://app2.example.com\"]}}"
 
 # Required for passkeys:
 # - Ensure apple-app-site-association / assetlinks.json are also configured for this domain

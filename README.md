@@ -1,12 +1,15 @@
-# CineDock Auth Worker (Cloudflare)
+# Auth Worker (Cloudflare)
 
-This worker provides a serverless auth flow for your app account system:
+This worker provides a reusable account system for one or more apps.
+
+Supported routes:
 
 - `POST /auth/send-code`
 - `POST /auth/verify-code`
 - `POST /auth/refresh`
 - `POST /auth/logout`
 - `GET /auth/me`
+- `POST /auth/profile`
 - `POST /auth/passkey/register/start`
 - `POST /auth/passkey/register/finish`
 - `POST /auth/passkey/login/start`
@@ -20,32 +23,30 @@ This worker provides a serverless auth flow for your app account system:
 ## 1) Install
 
 ```bash
-cd worker
+cd auth-worker
 npm install
 ```
 
-## 2) Login to Cloudflare
+## 2) Log in to Cloudflare
 
 ```bash
 npx wrangler login
 ```
-
-A browser window will open for authorization.
 
 ## 3) Create Cloudflare resources
 
 ### D1
 
 ```bash
-npx wrangler d1 create ivideo-auth
+npx wrangler d1 create auth-worker
 ```
 
-Copy `database_id` and replace it in `wrangler.toml`.
+Copy the `database_id` into `wrangler.toml`.
 
-Apply migration:
+Apply migrations:
 
 ```bash
-npx wrangler d1 migrations apply ivideo-auth --remote
+npx wrangler d1 migrations apply auth-worker --remote
 ```
 
 ### KV
@@ -54,7 +55,7 @@ npx wrangler d1 migrations apply ivideo-auth --remote
 npx wrangler kv namespace create OTP_KV
 ```
 
-Copy namespace `id` and replace it in `wrangler.toml`.
+Copy the namespace `id` into `wrangler.toml`.
 
 ## 4) Set secrets
 
@@ -72,79 +73,91 @@ npx wrangler secret put APP_EMAIL_SUBJECTS
 ```
 
 - `MAIL_GATEWAY_SIGNING_SECRET` is the HMAC key shared with `mail-gateway`.
-- `MAIL_GATEWAY_TOKEN` is optional fallback auth for migration/debug. Signature auth is preferred.
+- `MAIL_GATEWAY_TOKEN` is an optional fallback auth token.
 - `MAIL_GATEWAY` is configured as a Cloudflare service binding in `wrangler.toml`.
-- `APP_BUNDLE_ID` is configured in `wrangler.toml` and sent as `X-Bundle-Id`.
-- Optional subject template vars:
-  - `DEFAULT_EMAIL_SUBJECT` (default: `{app_name} Verification Code`)
-  - `APP_EMAIL_SUBJECTS` (JSON map by `appId`, e.g. `{"cinedock":"{app_name} 登录验证码"}`)
+- `APP_BUNDLE_ID` is forwarded as `X-Bundle-Id` for single-app setups.
+- `DEFAULT_EMAIL_SUBJECT` is the fallback subject template, for example `{app_name} Login Code`.
+- `APP_EMAIL_SUBJECTS` is a JSON map keyed by `appId`.
 
-## 4.1) Passkey variables
+## 5) Configure apps
 
-Set these in `wrangler.toml` (or via dashboard):
-
-- `PASSKEY_RP_ID`: your relying-party domain (e.g. `ixiaoxiang.cn`)
-- `PASSKEY_EXPECTED_ORIGINS`: comma-separated allowed origins (e.g. `https://ixiaoxiang.cn`)
-- `PASSKEY_RP_NAME`: display name in passkey prompt, default `CineDock`
-- `PASSKEY_CHALLENGE_TTL_SECONDS`: challenge validity, default `300`
-
-## 4.2) Multi-app support
-
-The worker supports multiple apps sharing one account system.
+The worker can serve multiple apps behind one auth backend.
 
 - Shared across all apps:
   - `users`
-  - OTP login email
+  - OTP login
   - Passkey credentials
 - Isolated by `appId`:
-  - sessions (refresh/access token audience)
-  - user settings and library profiles (prepare via migration)
+  - sessions and JWT audience
+  - sync settings
+  - library profiles
 
-Client requests should include header:
+Clients should send:
 
 ```http
-X-App-Id: cinedock
+X-App-Id: app1
 ```
 
 Environment variables:
 
-- `DEFAULT_APP_ID`: fallback app id when header is missing (default `cinedock`)
-- `APP_CONFIGS`: JSON map for per-app config (name/origin/passkey rp)
+- `DEFAULT_APP_ID`: fallback app id when the header is missing
+- `APP_CONFIGS`: JSON map of per-app config
 
 Example:
 
 ```json
 {
-  "cinedock": {
-    "appName": "CineDock",
-    "appOrigin": "https://cinedock.example.com",
-    "passkeyRpId": "example.com",
-    "passkeyRpName": "CineDock",
-    "passkeyExpectedOrigins": ["https://cinedock.example.com"]
+  "app1": {
+    "appName": "App One",
+    "appOrigin": "https://app1.example.com",
+    "appBundleId": "com.example.app1",
+    "passkeyRpId": "auth.example.com",
+    "passkeyRpName": "App One",
+    "passkeyExpectedOrigins": ["https://app1.example.com"]
   },
-  "anotherapp": {
-    "appName": "Another App",
-    "appOrigin": "https://another.example.com",
-    "passkeyRpId": "example.com",
-    "passkeyRpName": "Another App",
-    "passkeyExpectedOrigins": ["https://another.example.com"]
+  "app2": {
+    "appName": "App Two",
+    "appOrigin": "https://app2.example.com",
+    "appBundleId": "com.example.app2",
+    "passkeyRpId": "auth.example.com",
+    "passkeyRpName": "App Two",
+    "passkeyExpectedOrigins": ["https://app2.example.com"]
   }
 }
 ```
 
-## 5) Deploy
+Recommended per-app fields:
+
+- `appName`: display name used in emails and UI payloads
+- `appOrigin`: canonical web origin for CORS and passkey checks
+- `appBundleId`: bundle identifier sent to the mail gateway
+- `passkeyRpId`: relying-party domain for WebAuthn
+- `passkeyRpName`: passkey prompt display name
+- `passkeyExpectedOrigins`: allowed passkey origins
+
+If you only have one app, you can also set the global fallbacks in `wrangler.toml`:
+
+- `APP_NAME`
+- `APP_ORIGIN`
+- `APP_BUNDLE_ID`
+- `PASSKEY_RP_ID`
+- `PASSKEY_RP_NAME`
+- `PASSKEY_EXPECTED_ORIGINS`
+
+## 6) Deploy
 
 ```bash
 npx wrangler deploy
 ```
 
-## Request examples
+## Examples
 
 ### Send code
 
 ```bash
 curl -X POST "$WORKER_URL/auth/send-code" \
   -H 'content-type: application/json' \
+  -H 'x-app-id: app1' \
   -d '{"email":"you@example.com","purpose":"login"}'
 ```
 
@@ -153,6 +166,7 @@ curl -X POST "$WORKER_URL/auth/send-code" \
 ```bash
 curl -X POST "$WORKER_URL/auth/verify-code" \
   -H 'content-type: application/json' \
+  -H 'x-app-id: app1' \
   -d '{"email":"you@example.com","code":"123456","purpose":"login"}'
 ```
 
@@ -160,14 +174,16 @@ curl -X POST "$WORKER_URL/auth/verify-code" \
 
 ```bash
 curl "$WORKER_URL/auth/passkey/credentials" \
-  -H "authorization: Bearer $ACCESS_TOKEN"
+  -H "authorization: Bearer $ACCESS_TOKEN" \
+  -H 'x-app-id: app1'
 ```
 
 ### Read passkey login setting
 
 ```bash
 curl "$WORKER_URL/auth/passkey/settings" \
-  -H "authorization: Bearer $ACCESS_TOKEN"
+  -H "authorization: Bearer $ACCESS_TOKEN" \
+  -H 'x-app-id: app1'
 ```
 
 ### Toggle passkey login
@@ -176,6 +192,7 @@ curl "$WORKER_URL/auth/passkey/settings" \
 curl -X PATCH "$WORKER_URL/auth/passkey/settings" \
   -H 'content-type: application/json' \
   -H "authorization: Bearer $ACCESS_TOKEN" \
+  -H 'x-app-id: app1' \
   -d '{"passkeyLoginEnabled":true}'
 ```
 
@@ -185,6 +202,7 @@ curl -X PATCH "$WORKER_URL/auth/passkey/settings" \
 curl -X PATCH "$WORKER_URL/auth/passkey/credential" \
   -H 'content-type: application/json' \
   -H "authorization: Bearer $ACCESS_TOKEN" \
+  -H 'x-app-id: app1' \
   -d '{"credentialId":"abc123","alias":"MacBook Pro"}'
 ```
 
@@ -194,6 +212,7 @@ curl -X PATCH "$WORKER_URL/auth/passkey/credential" \
 curl -X DELETE "$WORKER_URL/auth/passkey/credential" \
   -H 'content-type: application/json' \
   -H "authorization: Bearer $ACCESS_TOKEN" \
+  -H 'x-app-id: app1' \
   -d '{"credentialId":"abc123"}'
 ```
 
@@ -202,31 +221,29 @@ Legacy clients may omit `credentialId` to delete all passkeys for the current us
 ## Notes
 
 - OTP is stored in KV with TTL.
-- Refresh token is hashed and stored in D1.
-- Access token is signed with `JWT_SECRET`.
-- Email sending is delegated to `mail-gateway`; this Worker signs the request and sends only mail payload.
+- Refresh tokens are hashed and stored in D1.
+- Access tokens are signed with `JWT_SECRET`.
+- Email delivery is delegated to `mail-gateway`.
 - Passkey start/finish routes use WebAuthn verification and persist credentials in D1.
-- `GET /auth/me` also returns the current user's passkey list for profile screens.
-- `GET /auth/me` also returns `passkey_login_enabled` for the current user.
-- `GET /auth/passkey/settings` returns the current user's passkey login toggle.
+- `GET /auth/me` returns the current user's passkey list and `passkey_login_enabled`.
+- `GET /auth/passkey/settings` reads the current user's passkey login toggle.
 - `PATCH /auth/passkey/settings` updates the current user's passkey login toggle.
 - `GET /auth/passkey/credentials` returns the current user's passkey list for the frontend.
 - `PATCH /auth/passkey/credential` updates a single passkey alias.
-- `DELETE /auth/passkey/credential` deletes a single passkey by `credentialId`; legacy clients may omit it to delete all passkeys.
+- `DELETE /auth/passkey/credential` deletes a single passkey by `credentialId`.
 - Each passkey item includes `addedAt` as the creation timestamp.
-- Passkeys are global account credentials and can be used across app ids (if RP/origin configuration allows it).
+- Passkeys are account-level credentials and can be reused across apps when the RP/origin config allows it.
 - Before passkeys work on mobile, complete domain association:
   - iOS: `apple-app-site-association` + Associated Domains (`webcredentials:`)
   - Android: `assetlinks.json` + Digital Asset Links verification
 
-## Pattern
+## Suggested setup pattern
 
-If you add another app in the future, follow the same structure:
+For each new app:
 
-- client -> `<app>-auth` / `<app>-notify` -> `mail-gateway`
-- configure `MAIL_GATEWAY` as a Cloudflare service binding
-- keep mail-gateway signing secrets only in the business Worker, never in the client
+- add an entry in `APP_CONFIGS`
+- send `X-App-Id` from the client
+- keep the app's bundle id, origin, and passkey config in that app entry
+- reuse the same worker and user database
 
-The shared integration contract is documented in:
-
-- `/Users/yulin/Projects/email-gateway-worker/README.md`
+The shared mail-gateway contract is documented in the mail gateway repository.

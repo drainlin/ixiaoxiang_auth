@@ -20,6 +20,9 @@ interface Env {
   APP_NAME?: string;
   APP_ORIGIN?: string;
   APP_BUNDLE_ID?: string;
+  DEFAULT_APP_NAME?: string;
+  DEFAULT_APP_ORIGIN?: string;
+  DEFAULT_APP_BUNDLE_ID?: string;
   ACCESS_TOKEN_TTL_SECONDS?: string;
   REFRESH_TOKEN_TTL_SECONDS?: string;
   OTP_TTL_SECONDS?: string;
@@ -54,7 +57,7 @@ type AppContext = {
 };
 
 const encoder = new TextEncoder();
-const DEFAULT_APP_ID = 'cinedock';
+const DEFAULT_APP_ID = 'default';
 
 class HttpError extends Error {
   status: number;
@@ -1636,11 +1639,15 @@ function resolveAppContext(request: Request, env: Env): AppContext {
   }
   const selected = appConfigs?.[requested] ?? {};
 
-  const appName = `${selected.appName ?? env.APP_NAME ?? 'CineDock'}`.trim() || 'CineDock';
-  const appOrigin = normalizeOptionalString(selected.appOrigin ?? env.APP_ORIGIN);
+  const appName =
+    `${selected.appName ?? env.APP_NAME ?? env.DEFAULT_APP_NAME ?? 'Auth Service'}`
+      .trim() || 'Auth Service';
+  const appOrigin = normalizeOptionalString(
+    selected.appOrigin ?? env.APP_ORIGIN ?? env.DEFAULT_APP_ORIGIN,
+  );
   const appBundleId =
-    `${selected.appBundleId ?? env.APP_BUNDLE_ID ?? 'cn.ixiaoxiang.video'}`.trim()
-    || 'cn.ixiaoxiang.video';
+    `${selected.appBundleId ?? env.APP_BUNDLE_ID ?? env.DEFAULT_APP_BUNDLE_ID ?? 'com.example.auth'}`
+      .trim() || 'com.example.auth';
   const passkeyRpId = normalizeOptionalString(selected.passkeyRpId ?? env.PASSKEY_RP_ID);
   const passkeyRpName = `${selected.passkeyRpName ?? env.PASSKEY_RP_NAME ?? appName}`.trim() || appName;
   const passkeyExpectedOrigins = normalizeStringArray(
