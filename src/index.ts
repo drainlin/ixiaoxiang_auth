@@ -1029,7 +1029,7 @@ async function handlePasskeyRegisterFinish(
     .run();
 
   await env.OTP_KV.delete(passkeyRegisterChallengeKey(app.appId, authUser.id));
-  return json({ ok: true });
+  return json({ ok: true, credentialId: info.credentialID });
 }
 
 async function handlePasskeyCredentialsList(
@@ -1246,7 +1246,7 @@ async function handlePasskeyLoginFinish(
 
     const tokens = await issueSessionTokens(env, app, user.id, user.email);
     await env.OTP_KV.delete(passkeyLoginChallengeKey(app.appId, challenge));
-    return json({ ok: true, user, tokens });
+    return json({ ok: true, credentialId: dbCredential.credential_id, user, tokens });
   } catch (error) {
     console.error("passkey-login-verify-error", error);
     return json({ error: "passkey_verification_failed" }, 400);

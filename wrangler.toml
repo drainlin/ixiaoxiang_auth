@@ -18,6 +18,10 @@ id = "bbc69d76ceb44d63810c920ad3896fda"
 binding = "MAIL_GATEWAY"
 service = "mail-gateway"
 
+[[routes]]
+pattern = "auth.ixiaoxiang.cn"
+custom_domain = true
+
 [vars]
 APP_NAME = "CineDock"
 DEFAULT_APP_ID = "cinedock"
