@@ -1283,8 +1283,8 @@ async function issueSessionTokens(
   email: string,
 ) {
   const now = nowSeconds();
-  const accessTtl = intVar(env.ACCESS_TOKEN_TTL_SECONDS, 900);
-  const refreshTtl = intVar(env.REFRESH_TOKEN_TTL_SECONDS, 2_592_000);
+  const accessTtl = intVar(env.ACCESS_TOKEN_TTL_SECONDS, 86_400);
+  const refreshTtl = intVar(env.REFRESH_TOKEN_TTL_SECONDS, 1_209_600);
 
   const accessToken = await signJwt(
     {

@@ -140,6 +140,8 @@ Environment variables:
 - `PASSKEY_RP_ID`: fallback relying-party domain if an app entry is missing
 - `PASSKEY_RP_NAME`: fallback passkey display name if an app entry is missing
 - `PASSKEY_EXPECTED_ORIGINS`: fallback list of allowed origins
+- `ACCESS_TOKEN_TTL_SECONDS`: access token lifetime in seconds, default `86400` (1 day)
+- `REFRESH_TOKEN_TTL_SECONDS`: refresh token lifetime in seconds, default `1209600` (2 weeks)
 
 ## Deploy
 
