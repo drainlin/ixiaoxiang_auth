@@ -1,4 +1,4 @@
-name = "auth-worker"
+name = "ivideo-auth"
 main = "src/index.ts"
 compatibility_date = "2026-03-10"
 
@@ -7,7 +7,7 @@ enabled = true
 
 [[d1_databases]]
 binding = "DB"
-database_name = "auth-worker"
+  database_name = "ivideo-auth"
 database_id = "b11d60cf-c3ad-42a7-bbab-d7cf0ebf49a0"
 
 [[kv_namespaces]]
