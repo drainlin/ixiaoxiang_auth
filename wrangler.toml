@@ -30,6 +30,14 @@ zone_name = "ixiaoxiang.cn"
 pattern = "ixiaoxiang.cn/.well-known/assetlinks.json"
 zone_name = "ixiaoxiang.cn"
 
+[[routes]]
+pattern = "www.ixiaoxiang.cn/.well-known/apple-app-site-association"
+zone_name = "ixiaoxiang.cn"
+
+[[routes]]
+pattern = "www.ixiaoxiang.cn/.well-known/assetlinks.json"
+zone_name = "ixiaoxiang.cn"
+
 [vars]
 APP_NAME = "CineDock"
 DEFAULT_APP_ID = "cinedock"
