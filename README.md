@@ -6,6 +6,7 @@ Current built-in app configs:
 
 - `cinedock` for ivideo
 - `echospace` for imusic
+- `echoshelf` for EchoShelf
 
 Supported routes:
 
@@ -106,6 +107,7 @@ Built-in app ids:
 
 - `cinedock` for ivideo
 - `echospace` for imusic
+- `echoshelf` for EchoShelf
 
 Recommended config shape:
 
@@ -126,6 +128,17 @@ Recommended config shape:
     "passkeyRpId": "ixiaoxiang.cn",
     "passkeyRpName": "EchoSpace",
     "passkeyExpectedOrigins": ["https://ixiaoxiang.cn"]
+  },
+  "echoshelf": {
+    "appName": "EchoShelf",
+    "appOrigin": "https://ixiaoxiang.cn",
+    "appBundleId": "cn.ixiaoxiang.listen",
+    "passkeyRpId": "ixiaoxiang.cn",
+    "passkeyRpName": "EchoShelf",
+    "passkeyExpectedOrigins": [
+      "https://ixiaoxiang.cn",
+      "android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s"
+    ]
   }
 }
 ```

@@ -58,6 +58,35 @@ type AppContext = {
 
 const encoder = new TextEncoder();
 const DEFAULT_APP_ID = "cinedock";
+const ASSOCIATED_DOMAIN_TEAM_ID = "3VJQJ98N8C";
+const APPLE_ASSOCIATED_BUNDLE_IDS = [
+  "cn.ixiaoxiang.video",
+  "cn.ixiaoxiang.music",
+  "cn.ixiaoxiang.listen",
+];
+const ANDROID_DIGITAL_ASSET_LINKS = [
+  {
+    packageName: "cn.ixiaoxiang.video",
+    fingerprints: [
+      "57:3E:96:90:78:AF:E2:72:76:73:F1:B6:EB:83:6A:F5:A8:38:CA:37:26:2E:E1:6B:B9:B3:19:7B:A6:D9:C8:1D",
+      "91:F1:2A:5D:25:05:33:7B:28:F1:DB:56:16:F0:8C:F2:DC:DE:9D:7B:B0:7C:FE:9B:B4:4F:D4:E2:A4:62:73:5B",
+      "6D:CF:3E:E4:1B:B0:1F:2D:55:06:6A:16:AC:15:59:66:07:E8:A9:DF:B2:0B:A1:35:6E:44:F8:72:F1:66:90:D2",
+    ],
+  },
+  {
+    packageName: "cn.ixiaoxiang.music",
+    fingerprints: [
+      "F3:FA:D4:81:C5:4D:F8:E5:7C:B9:F0:21:84:14:0B:DB:24:DC:C6:93:42:E1:BB:19:54:F4:AE:51:D7:EA:C9:94",
+      "91:F1:2A:5D:25:05:33:7B:28:F1:DB:56:16:F0:8C:F2:DC:DE:9D:7B:B0:7C:FE:9B:B4:4F:D4:E2:A4:62:73:5B",
+    ],
+  },
+  {
+    packageName: "cn.ixiaoxiang.listen",
+    fingerprints: [
+      "91:F1:2A:5D:25:05:33:7B:28:F1:DB:56:16:F0:8C:F2:DC:DE:9D:7B:B0:7C:FE:9B:B4:4F:D4:E2:A4:62:73:5B",
+    ],
+  },
+];
 
 class HttpError extends Error {
   status: number;
@@ -81,6 +110,19 @@ export default {
       }
 
       const url = new URL(request.url);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/.well-known/apple-app-site-association"
+      ) {
+        return appleAppSiteAssociationResponse();
+      }
+      if (
+        request.method === "GET" &&
+        url.pathname === "/.well-known/assetlinks.json"
+      ) {
+        return assetLinksResponse();
+      }
+
       const path = normalizeApiPath(url.pathname);
 
       if (request.method === "POST" && path === "/auth/send-code") {
@@ -1708,6 +1750,45 @@ function json(data: unknown, status = 200): Response {
       "content-type": "application/json; charset=utf-8",
     },
   });
+}
+
+function appleAppSiteAssociationResponse(): Response {
+  const appIds = APPLE_ASSOCIATED_BUNDLE_IDS.map(
+    (bundleId) => `${ASSOCIATED_DOMAIN_TEAM_ID}.${bundleId}`,
+  );
+  return json({
+    applinks: {
+      apps: [],
+      details: appIds.map((appID) => ({ appID, paths: ["*"] })),
+    },
+    webcredentials: {
+      apps: appIds,
+    },
+  });
+}
+
+function assetLinksResponse(): Response {
+  const relation = [
+    "delegate_permission/common.get_login_creds",
+    "delegate_permission/common.handle_all_urls",
+  ];
+  return json([
+    ...ANDROID_DIGITAL_ASSET_LINKS.map((app) => ({
+      relation,
+      target: {
+        namespace: "android_app",
+        package_name: app.packageName,
+        sha256_cert_fingerprints: app.fingerprints,
+      },
+    })),
+    {
+      relation,
+      target: {
+        namespace: "web",
+        site: "https://ixiaoxiang.cn",
+      },
+    },
+  ]);
 }
 
 function withCors(response: Response, env: Env, request: Request): Response {
