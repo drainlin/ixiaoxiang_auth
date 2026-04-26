@@ -137,7 +137,8 @@ Recommended config shape:
     "passkeyRpName": "EchoShelf",
     "passkeyExpectedOrigins": [
       "https://ixiaoxiang.cn",
-      "android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s"
+      "android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s",
+      "android:apk-key-hash:_YsTiSH_CC0qlpSXGGhlXnVeL1ft077adRSFeI1wXw4"
     ]
   }
 }

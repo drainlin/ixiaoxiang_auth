@@ -84,6 +84,7 @@ const ANDROID_DIGITAL_ASSET_LINKS = [
     packageName: "cn.ixiaoxiang.listen",
     fingerprints: [
       "91:F1:2A:5D:25:05:33:7B:28:F1:DB:56:16:F0:8C:F2:DC:DE:9D:7B:B0:7C:FE:9B:B4:4F:D4:E2:A4:62:73:5B",
+      "FD:8B:13:89:21:FF:08:2D:2A:96:94:97:18:68:65:5E:75:5E:2F:57:ED:D3:BE:DA:75:14:85:78:8D:70:5F:0E",
     ],
   },
 ];
