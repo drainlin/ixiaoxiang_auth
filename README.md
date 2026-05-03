@@ -119,7 +119,11 @@ Recommended config shape:
     "appBundleId": "cn.ixiaoxiang.video",
     "passkeyRpId": "ixiaoxiang.cn",
     "passkeyRpName": "CineDock",
-    "passkeyExpectedOrigins": ["https://ixiaoxiang.cn"]
+    "passkeyExpectedOrigins": [
+      "https://ixiaoxiang.cn",
+      "android:apk-key-hash:Vz6WkHiv4nJ2c_G264Nq9ag4yjcmLuFrubMZe6bZyB0",
+      "android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s"
+    ]
   },
   "echospace": {
     "appName": "EchoSpace",
