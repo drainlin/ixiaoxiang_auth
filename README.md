@@ -7,6 +7,7 @@ Current built-in app configs:
 - `cinedock` for ivideo
 - `echospace` for imusic
 - `echoshelf` for EchoShelf
+- `inkveil` for icomic
 
 Supported routes:
 
@@ -108,6 +109,7 @@ Built-in app ids:
 - `cinedock` for ivideo
 - `echospace` for imusic
 - `echoshelf` for EchoShelf
+- `inkveil` for icomic
 
 Recommended config shape:
 
@@ -143,6 +145,18 @@ Recommended config shape:
       "https://ixiaoxiang.cn",
       "android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s",
       "android:apk-key-hash:_YsTiSH_CC0qlpSXGGhlXnVeL1ft077adRSFeI1wXw4"
+    ]
+  },
+  "inkveil": {
+    "appName": "Inkveil",
+    "appOrigin": "https://ixiaoxiang.cn",
+    "appBundleId": "cn.ixiaoxiang.comic",
+    "passkeyRpId": "ixiaoxiang.cn",
+    "passkeyRpName": "Inkveil",
+    "passkeyExpectedOrigins": [
+      "https://ixiaoxiang.cn",
+      "android:apk-key-hash:9ZP5D7d2kTWsOtZcQiCRwsEmGosuwDpycHSrQX1FTbY",
+      "android:apk-key-hash:kfEqXSUFM3so8dtWFvCM8tzenXuwfP6btE_U4qRic1s"
     ]
   }
 }

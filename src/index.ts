@@ -63,6 +63,7 @@ const APPLE_ASSOCIATED_BUNDLE_IDS = [
   "cn.ixiaoxiang.video",
   "cn.ixiaoxiang.music",
   "cn.ixiaoxiang.listen",
+  "cn.ixiaoxiang.comic",
 ];
 const ANDROID_DIGITAL_ASSET_LINKS = [
   {
@@ -85,6 +86,13 @@ const ANDROID_DIGITAL_ASSET_LINKS = [
     fingerprints: [
       "91:F1:2A:5D:25:05:33:7B:28:F1:DB:56:16:F0:8C:F2:DC:DE:9D:7B:B0:7C:FE:9B:B4:4F:D4:E2:A4:62:73:5B",
       "FD:8B:13:89:21:FF:08:2D:2A:96:94:97:18:68:65:5E:75:5E:2F:57:ED:D3:BE:DA:75:14:85:78:8D:70:5F:0E",
+    ],
+  },
+  {
+    packageName: "cn.ixiaoxiang.comic",
+    fingerprints: [
+      "F5:93:F9:0F:B7:76:91:35:AC:3A:D6:5C:42:20:91:C2:C1:26:1A:8B:2E:C0:3A:72:70:74:AB:41:7D:45:4D:B6",
+      "91:F1:2A:5D:25:05:33:7B:28:F1:DB:56:16:F0:8C:F2:DC:DE:9D:7B:B0:7C:FE:9B:B4:4F:D4:E2:A4:62:73:5B",
     ],
   },
 ];
@@ -1757,7 +1765,7 @@ function appleAppSiteAssociationResponse(): Response {
   const appIds = APPLE_ASSOCIATED_BUNDLE_IDS.map(
     (bundleId) => `${ASSOCIATED_DOMAIN_TEAM_ID}.${bundleId}`,
   );
-  return json({
+  return wellKnownJson({
     applinks: {
       apps: [],
       details: appIds.map((appID) => ({ appID, paths: ["*"] })),
@@ -1773,7 +1781,7 @@ function assetLinksResponse(): Response {
     "delegate_permission/common.get_login_creds",
     "delegate_permission/common.handle_all_urls",
   ];
-  return json([
+  return wellKnownJson([
     ...ANDROID_DIGITAL_ASSET_LINKS.map((app) => ({
       relation,
       target: {
@@ -1790,6 +1798,18 @@ function assetLinksResponse(): Response {
       },
     },
   ]);
+}
+
+function wellKnownJson(data: unknown): Response {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+      pragma: "no-cache",
+      expires: "0",
+    },
+  });
 }
 
 function withCors(response: Response, env: Env, request: Request): Response {
